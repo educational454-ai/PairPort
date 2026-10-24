@@ -109,7 +109,7 @@ ROOM_CLEANUP_INTERVAL_SECONDS = int(os.getenv("PAIRPORT_ROOM_CLEANUP_INTERVAL_SE
 MAX_MESSAGE_BYTES = int(os.getenv("PAIRPORT_MAX_MESSAGE_BYTES", "65536"))  # 64 KB
 MAX_PARTICIPANTS_PER_ROOM = 2
 ROOM_CODE_PREFIX = "PORT-"
-ROOM_CODE_LENGTH = 4  # e.g. PORT-7K2M (30^4 = 810,000 combinations)
+ROOM_CODE_LENGTH = int(os.getenv("PAIRPORT_ROOM_CODE_LENGTH", "6"))  # e.g. PORT-7K2M9X (31^6 = 887,503,681 combinations)
 
 # Server capacity limits and WebSocket rate limiting (Phase 9)
 MAX_ACTIVE_ROOMS = int(os.getenv("PAIRPORT_MAX_ACTIVE_ROOMS", "10000"))

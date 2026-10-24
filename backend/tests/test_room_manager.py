@@ -4,7 +4,9 @@ import asyncio
 import time
 import unittest
 
+from app.config import ROOM_CODE_LENGTH, ROOM_CODE_PREFIX
 from app.services.room_manager import (
+    UNAMBIGUOUS_ALPHABET,
     InvalidRoomCodeError,
     RoomExpiredError,
     RoomFullError,
@@ -22,23 +24,42 @@ class TestRoomManager(unittest.IsolatedAsyncioTestCase):
 
     def test_unambiguous_code_generation(self) -> None:
         code = generate_unambiguous_code()
-        self.assertTrue(code.startswith("PORT-"))
-        self.assertEqual(len(code), 9)
+        self.assertTrue(code.startswith(ROOM_CODE_PREFIX))
+        self.assertEqual(len(code), len(ROOM_CODE_PREFIX) + ROOM_CODE_LENGTH)
+        # Suffix must match configured length
+        suffix = code[len(ROOM_CODE_PREFIX):]
+        self.assertEqual(len(suffix), ROOM_CODE_LENGTH)
+        # Verify characters belong to configured UNAMBIGUOUS_ALPHABET
+        for char in suffix:
+            self.assertIn(char, UNAMBIGUOUS_ALPHABET)
         # Verify no ambiguous characters (0, O, 1, I, L)
-        suffix = code.split("-")[1]
         for bad_char in ["0", "O", "1", "I", "L"]:
             self.assertNotIn(bad_char, suffix)
 
+    def test_unambiguous_code_uniqueness_sample(self) -> None:
+        sample_size = 100
+        codes = {generate_unambiguous_code() for _ in range(sample_size)}
+        self.assertEqual(len(codes), sample_size)
+
     def test_normalize_room_code(self) -> None:
+        # Accepts new 6-character format
+        self.assertEqual(normalize_room_code("port-7k2m9x"), "PORT-7K2M9X")
+        self.assertEqual(normalize_room_code("PORT-7K2M9X"), "PORT-7K2M9X")
+        self.assertEqual(normalize_room_code("7k2m9x"), "PORT-7K2M9X")
+        self.assertEqual(normalize_room_code("port7k2m9x"), "PORT-7K2M9X")
+
+        # Preserves backward compatibility for 4-character codes (supported length range 3-8)
         self.assertEqual(normalize_room_code("port-7k2m"), "PORT-7K2M")
         self.assertEqual(normalize_room_code("PORT-7K2M"), "PORT-7K2M")
-        self.assertEqual(normalize_room_code("7k2m"), "PORT-7K2M")
-        self.assertEqual(normalize_room_code("port7k2m"), "PORT-7K2M")
 
         with self.assertRaises(InvalidRoomCodeError):
             normalize_room_code("")
         with self.assertRaises(InvalidRoomCodeError):
-            normalize_room_code("ab")  # Too short
+            normalize_room_code("ab")  # Too short (< 3)
+        with self.assertRaises(InvalidRoomCodeError):
+            normalize_room_code("A" * 9)  # Too long (> 8)
+        with self.assertRaises(InvalidRoomCodeError):
+            normalize_room_code("port-7k2m!x")  # Invalid character
 
     async def test_room_creation(self) -> None:
         room = await self.manager.create_room()

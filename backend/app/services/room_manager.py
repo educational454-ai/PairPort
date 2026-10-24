@@ -63,12 +63,12 @@ class ServerCapacityError(RoomError):
 def normalize_room_code(raw_code: str) -> str:
     """Normalize input room code.
     
-    Trims whitespace, converts to uppercase, and ensures standard PORT-XXXX formatting.
+    Trims whitespace, converts to uppercase, and ensures standard PORT-XXXXXX formatting.
     Accepts formats such as:
-    - 'PORT-7K2M' -> 'PORT-7K2M'
-    - 'port-7k2m' -> 'PORT-7K2M'
-    - '7k2m'      -> 'PORT-7K2M'
-    - 'PORT7K2M'  -> 'PORT-7K2M'
+    - 'PORT-7K2M9X' -> 'PORT-7K2M9X'
+    - 'port-7k2m9x' -> 'PORT-7K2M9X'
+    - '7k2m9x'      -> 'PORT-7K2M9X'
+    - 'PORT7K2M9X'  -> 'PORT-7K2M9X'
     """
     if not raw_code or not isinstance(raw_code, str):
         raise InvalidRoomCodeError("Room code cannot be empty.")
@@ -85,7 +85,7 @@ def normalize_room_code(raw_code: str) -> str:
 
     if not suffix or len(suffix) < 3 or len(suffix) > 8:
         raise InvalidRoomCodeError(
-            f"Invalid room code length. Expected {ROOM_CODE_PREFIX}XXXX format."
+            f"Invalid room code length. Expected {ROOM_CODE_PREFIX}{'X' * ROOM_CODE_LENGTH} format."
         )
 
     for char in suffix:

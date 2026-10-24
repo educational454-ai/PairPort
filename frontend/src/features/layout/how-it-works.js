@@ -29,7 +29,7 @@ export function renderHowItWorks() {
             </div>
             <h3 class="step-title">Create or Join a Room</h3>
             <p class="step-text">
-              One peer creates a room and receives a server-generated code (e.g. <code>PORT-XXXX</code>). The other peer enters the code to join.
+              One peer creates a room and receives a server-generated code (e.g. <code>PORT-XXXXXX</code>). The other peer enters the code to join.
             </p>
           </div>
 

@@ -28,9 +28,18 @@ test('1. validateRoomCode rules and normalization', async (t) => {
       message: 'Valid room code format.',
     });
 
+    assert.deepEqual(validateRoomCode('PORT-7K2M9X'), {
+      isValid: true,
+      code: 'PORT-7K2M9X',
+      error: null,
+      message: 'Valid room code format.',
+    });
+
     assert.equal(validateRoomCode('abc123').code, 'ABC123');
     assert.equal(validateRoomCode('  7k2m  ').code, '7K2M');
     assert.equal(validateRoomCode('7K2M').isValid, true);
+    assert.equal(validateRoomCode('  7k2m9x  ').code, '7K2M9X');
+    assert.equal(validateRoomCode('7K2M9X').isValid, true);
   });
 
   await t.test('rejects empty or whitespace room codes', () => {

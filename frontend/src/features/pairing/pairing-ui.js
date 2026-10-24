@@ -137,7 +137,7 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
                     type="text"
                     id="room-code-input"
                     class="form-input code-input"
-                    placeholder="e.g. PORT-7K2M"
+                    placeholder="e.g. PORT-7K2M9X"
                     maxlength="16"
                     autocomplete="off"
                     spellcheck="false"
@@ -148,7 +148,7 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
                   </button>
                 </div>
                 <div id="join-code-feedback" class="form-feedback" aria-live="polite"></div>
-                <p class="input-helper">Codes are formatted like <code>PORT-XXXX</code> or 6 letters/digits.</p>
+                <p class="input-helper">Codes are formatted like <code>PORT-XXXXXX</code> or 6 letters/digits.</p>
               </div>
 
               <div class="card-actions">

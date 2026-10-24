@@ -5,6 +5,7 @@ import time
 import unittest
 from starlette.testclient import TestClient
 
+from app.config import ROOM_CODE_LENGTH, ROOM_CODE_PREFIX
 from app.main import app
 from app.services.room_manager import room_manager
 
@@ -25,7 +26,8 @@ class TestWebSocketSignaling(unittest.TestCase):
             msg1 = ws.receive_json()
             self.assertEqual(msg1["type"], "room-created")
             payload1 = msg1["payload"]
-            self.assertTrue(payload1["room_code"].startswith("PORT-"))
+            self.assertTrue(payload1["room_code"].startswith(ROOM_CODE_PREFIX))
+            self.assertEqual(len(payload1["room_code"]), len(ROOM_CODE_PREFIX) + ROOM_CODE_LENGTH)
             self.assertEqual(payload1["role"], "host")
             self.assertTrue(payload1["session_id"])
             self.assertIn("expires_in", payload1)
@@ -64,14 +66,36 @@ class TestWebSocketSignaling(unittest.TestCase):
                 self.assertEqual(host_event["payload"]["role"], "host")
                 self.assertEqual(host_event["payload"]["peer_session_id"], guest_session_id)
 
+    def test_join_room_via_url_path_new_format(self) -> None:
+        """Verify joining an existing 6-character room code via /ws/{room_code} URL path."""
+        with self.client.websocket_connect("/ws") as host_ws:
+            host_ws.send_json({"type": "create"})
+            created_event = host_ws.receive_json()
+            room_code = created_event["payload"]["room_code"]
+            host_session_id = created_event["payload"]["session_id"]
+            _ = host_ws.receive_json()  # waiting event
+
+            with self.client.websocket_connect(f"/ws/{room_code}") as guest_ws:
+                guest_event = guest_ws.receive_json()
+                self.assertEqual(guest_event["type"], "peer-joined")
+                self.assertEqual(guest_event["payload"]["room_code"], room_code)
+                self.assertEqual(guest_event["payload"]["role"], "guest")
+                self.assertEqual(guest_event["payload"]["peer_session_id"], host_session_id)
+
     def test_join_invalid_or_nonexistent_room(self) -> None:
         """Verify joining invalid or nonexistent rooms returns structured error events."""
         with self.client.websocket_connect("/ws") as ws:
-            # Nonexistent room
-            ws.send_json({"type": "join", "payload": {"room_code": "PORT-9999"}})
+            # Nonexistent 6-character room
+            ws.send_json({"type": "join", "payload": {"room_code": "PORT-999999"}})
             err_msg = ws.receive_json()
             self.assertEqual(err_msg["type"], "error")
             self.assertEqual(err_msg["payload"]["code"], "ROOM_NOT_FOUND")
+
+            # Malformed room code (too short)
+            ws.send_json({"type": "join", "payload": {"room_code": "ab"}})
+            err_malformed = ws.receive_json()
+            self.assertEqual(err_malformed["type"], "error")
+            self.assertEqual(err_malformed["payload"]["code"], "INVALID_ROOM_CODE")
 
             # Missing room code payload
             ws.send_json({"type": "join", "payload": {}})
