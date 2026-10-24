@@ -9,11 +9,10 @@
  * - Strict XSS protection and input sanitization
  * - Separation of live P2P chat from sample demo preview
  */
-
 import { APP_CONFIG } from './config/app-config.js';
 import { icons } from './components/icons.js';
 import { showToast } from './components/toast.js';
-import { initModal, openPhaseModal, showConfirmDialog } from './components/modal.js';
+import { initModal, showConfirmDialog } from './components/modal.js';
 import { signalingClient, SIGNALING_STATES } from './services/signaling.js';
 import {
   peerConnectionService,
@@ -30,6 +29,14 @@ import {
 } from './utils/ui-helpers.js';
 
 import { state, resetSessionState } from './state/app-state.js';
+import {
+  renderNavbar,
+  initNavbar,
+  renderHero,
+  renderFeatures,
+  renderHowItWorks,
+  renderFooter,
+} from './features/layout/index.js';
 
 /** Render the complete Phase 4 UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -52,6 +59,9 @@ export function startApp(root = document.querySelector('#app')) {
     </div>
   `;
 
+  // Initialize navbar interactions (mobile menu toggle & roadmap trigger)
+  initNavbar(root);
+
   // Initialize roadmap modal
   initModal();
 
@@ -68,263 +78,6 @@ export function startApp(root = document.querySelector('#app')) {
 // ==========================================
 // RENDER HELPERS
 // ==========================================
-
-function renderNavbar() {
-  return `
-    <header class="site-header" role="banner">
-      <div class="header-container">
-        <a href="#hero" class="brand-link" aria-label="PairPort Home">
-          ${icons.logo(32)}
-          <span class="brand-name">${APP_CONFIG.name}</span>
-          <span class="phase-pill" title="Phase 5 WebRTC P2P File Transfer Active">Phase 5 P2P Files & Chat</span>
-        </a>
-
-        <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
-          <ul class="nav-links">
-            <li><a href="#features" class="nav-link">Features</a></li>
-            <li><a href="#how-it-works" class="nav-link">How it Works</a></li>
-            <li><a href="#pairing" class="nav-link">Pairing (Live)</a></li>
-            <li><a href="#workspace" class="nav-link">P2P Chat & Workspace</a></li>
-          </ul>
-        </nav>
-
-        <div class="header-actions">
-          <button type="button" class="btn btn-ghost btn-sm roadmap-btn" aria-label="View project roadmap">
-            ${icons.info(16)}
-            <span>Roadmap</span>
-          </button>
-          <a href="#pairing" class="btn btn-primary btn-sm header-cta">
-            <span>Start Sharing</span>
-            ${icons.arrowRight(16)}
-          </a>
-          <button type="button" class="mobile-toggle" aria-controls="site-nav" aria-expanded="false" aria-label="Toggle navigation menu">
-            ${icons.menu(22)}
-          </button>
-        </div>
-      </div>
-    </header>
-  `;
-}
-
-function renderHero() {
-  return `
-    <section id="hero" class="hero-section" aria-labelledby="hero-heading">
-      <div class="hero-glow hero-glow-1" aria-hidden="true"></div>
-      <div class="hero-glow hero-glow-2" aria-hidden="true"></div>
-
-      <div class="hero-container">
-        <div class="hero-content">
-          <div class="hero-eyebrow">
-            <span class="pulse-dot" aria-hidden="true"></span>
-            <span>Direct WebRTC DataChannel Active · Ephemeral Chat</span>
-          </div>
-
-          <h1 id="hero-heading" class="hero-title">
-            Connect directly.<br />
-            <span class="text-gradient">Share freely.</span>
-          </h1>
-
-          <p class="hero-description">
-            Fast, private peer-to-peer WebRTC connections and ephemeral real-time chat straight between web browsers.
-            No cloud storage, zero server chat logging, and no account sign-up.
-          </p>
-
-          <div class="hero-cta-group">
-            <a href="#pairing" class="btn btn-primary btn-lg">
-              <span>Start P2P Session</span>
-              ${icons.arrowRight(18)}
-            </a>
-            <a href="#how-it-works" class="btn btn-secondary btn-lg">
-              ${icons.sparkles(18)}
-              <span>How it works</span>
-            </a>
-            <a href="#workspace" class="btn btn-ghost btn-lg">
-              <span>Open P2P Workspace</span>
-            </a>
-          </div>
-
-          <div class="hero-badges">
-            <div class="badge-item">
-              ${icons.shield(18)}
-              <span>WebRTC DataChannels</span>
-            </div>
-            <div class="badge-item">
-              ${icons.chat(18)}
-              <span>Zero-Server Chat Relay</span>
-            </div>
-            <div class="badge-item">
-              ${icons.lock(18)}
-              <span>Local Ephemeral Memory Only</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="hero-preview-wrapper">
-          <div class="hero-mockup-card">
-            <div class="mockup-header">
-              <div class="mockup-dots" aria-hidden="true">
-                <span></span><span></span><span></span>
-              </div>
-              <div class="mockup-room-badge">
-                <span class="status-indicator-dot online"></span>
-                <span>Active Session: <strong>${state.realRoomCode || 'PORT-8492'}</strong></span>
-              </div>
-              <span class="mockup-label">WebRTC Active</span>
-            </div>
-
-            <div class="mockup-body">
-              <div class="mockup-peer-bar">
-                <div class="peer-avatar">
-                  ${icons.user(16)}
-                </div>
-                <div class="peer-info">
-                  <span class="peer-name">Connected Peer</span>
-                  <span class="peer-details">Direct WebRTC DataChannel · SCTP</span>
-                </div>
-                <span class="transfer-speed-chip">P2P Active</span>
-              </div>
-
-              <div class="mockup-chat-snippet">
-                <div class="chat-bubble peer">
-                  <span class="bubble-sender">Peer</span>
-                  <p>Direct WebRTC channel open! No server sees our messages.</p>
-                </div>
-                <div class="chat-bubble you">
-                  <span class="bubble-sender">You</span>
-                  <p>Connected instantly via browser peer-to-peer data channel.</p>
-                </div>
-              </div>
-            </div>
-
-            <div class="mockup-footer">
-              <a href="#workspace" class="mockup-cta-link">
-                <span>Open live workspace and test chat</span>
-                ${icons.arrowRight(14)}
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  `;
-}
-
-function renderFeatures() {
-  return `
-    <section id="features" class="features-section" aria-labelledby="features-heading">
-      <div class="section-container">
-        <div class="section-header">
-          <span class="section-eyebrow">CORE ARCHITECTURE</span>
-          <h2 id="features-heading" class="section-title">Built for direct peer communication</h2>
-          <p class="section-subtitle">
-            PairPort coordinates initial signaling via FastAPI WebSockets, then transfers data directly browser-to-browser via WebRTC.
-          </p>
-        </div>
-
-        <div class="features-grid">
-          <article class="feature-card highlight">
-            <div class="feature-icon-wrapper">
-              ${icons.chat(24)}
-            </div>
-            <h3 class="feature-title">Real-Time WebRTC Chat</h3>
-            <p class="feature-text">
-              Chat messages travel over dedicated SCTP data channels directly between browsers.
-              Zero messages pass through or are saved by any server.
-            </p>
-            <ul class="feature-specs">
-              <li>Direct browser-to-browser transport</li>
-              <li>Zero server message logging</li>
-              <li>Purely ephemeral memory session</li>
-            </ul>
-          </article>
-
-          <article class="feature-card">
-            <div class="feature-icon-wrapper">
-              ${icons.shield(24)}
-            </div>
-            <h3 class="feature-title">Private Room Pairing</h3>
-            <p class="feature-text">
-              Clean 4-character room codes generated with unambiguous characters.
-              Strictly restricted to two participants per room with immediate disconnect cleanup.
-            </p>
-            <ul class="feature-specs">
-              <li>FastAPI WebSocket signaling</li>
-              <li>Server-generated identities</li>
-              <li>Two-participant room guarantee</li>
-            </ul>
-          </article>
-
-          <article class="feature-card">
-            <div class="feature-icon-wrapper">
-              ${icons.zap(24)}
-            </div>
-            <h3 class="feature-title">Frictionless P2P Sharing</h3>
-            <p class="feature-text">
-              Direct connection without account creation or installs. Next phase enables chunked
-              binary streaming of documents, media, and archives directly over data channels.
-            </p>
-            <ul class="feature-specs">
-              <li>No cloud storage intermediaries</li>
-              <li>Standard WebRTC STUN discovery</li>
-              <li>Clean graceful disconnection</li>
-            </ul>
-          </article>
-        </div>
-      </div>
-    </section>
-  `;
-}
-
-function renderHowItWorks() {
-  return `
-    <section id="how-it-works" class="how-it-works-section" aria-labelledby="how-heading">
-      <div class="section-container">
-        <div class="section-header">
-          <span class="section-eyebrow">SIMPLE 3-STEP WORKFLOW</span>
-          <h2 id="how-heading" class="section-title">How PairPort works</h2>
-          <p class="section-subtitle">
-            No installation, no account creation, and no cloud file storage required.
-          </p>
-        </div>
-
-        <div class="steps-grid">
-          <div class="step-card">
-            <div class="step-badge">Step 1</div>
-            <div class="step-icon">
-              ${icons.p2p(24)}
-            </div>
-            <h3 class="step-title">Create or Join a Room</h3>
-            <p class="step-text">
-              One peer creates a room and receives a server-generated code (e.g. <code>PORT-XXXX</code>). The other peer enters the code to join.
-            </p>
-          </div>
-
-          <div class="step-card">
-            <div class="step-badge">Step 2</div>
-            <div class="step-icon">
-              ${icons.wifi(24)}
-            </div>
-            <h3 class="step-title">WebRTC Handshake</h3>
-            <p class="step-text">
-              Browsers exchange SDP offers/answers and ICE candidates via the signaling server to establish an encrypted direct peer connection.
-            </p>
-          </div>
-
-          <div class="step-card">
-            <div class="step-badge">Step 3</div>
-            <div class="step-icon">
-              ${icons.chat(24)}
-            </div>
-            <h3 class="step-title">Chat Directly (Live)</h3>
-            <p class="step-text">
-              An active <code>RTCDataChannel</code> allows instant messaging directly between devices. Messages clear completely upon disconnect.
-            </p>
-          </div>
-        </div>
-      </div>
-    </section>
-  `;
-}
 
 function renderPairingSection() {
   return `
@@ -1097,57 +850,7 @@ function renderChatMessages() {
   }).join('');
 }
 
-function renderFooter() {
-  return `
-    <footer class="site-footer" role="contentinfo">
-      <div class="footer-container">
-        <div class="footer-primary">
-          <div class="footer-brand">
-            <div class="brand-link">
-              ${icons.logo(28)}
-              <span class="brand-name">${APP_CONFIG.name}</span>
-            </div>
-            <p class="footer-tagline">${APP_CONFIG.tagline}</p>
-            <p class="footer-description">
-              A modern peer-to-peer web application designed for direct, browser-to-browser sharing without intermediaries.
-            </p>
-          </div>
 
-          <div class="footer-nav-group">
-            <h4 class="footer-group-title">Navigation</h4>
-            <ul class="footer-links">
-              <li><a href="#hero">Overview</a></li>
-              <li><a href="#features">Features</a></li>
-              <li><a href="#how-it-works">How it Works</a></li>
-              <li><a href="#pairing">Room Pairing</a></li>
-              <li><a href="#workspace">P2P Workspace</a></li>
-            </ul>
-          </div>
-
-          <div class="footer-tech-group">
-            <h4 class="footer-group-title">Architecture</h4>
-            <ul class="footer-tech-list">
-              <li><span class="tech-label">Frontend:</span> Vanilla JS + Vite</li>
-              <li><span class="tech-label">Backend:</span> Python FastAPI (Signaling Relay)</li>
-              <li><span class="tech-label">Chat Transport:</span> WebRTC DataChannel (Active)</li>
-              <li><span class="tech-label">File Protocol:</span> Chunked SCTP (Phase 5)</li>
-            </ul>
-          </div>
-        </div>
-
-        <div class="footer-bottom">
-          <div class="footer-status-pill">
-            <span class="status-indicator-dot online"></span>
-            <span>${APP_CONFIG.currentPhase}</span>
-          </div>
-          <p class="footer-copyright">
-            © ${new Date().getFullYear()} PairPort. Direct peer-to-peer web technology.
-          </p>
-        </div>
-      </div>
-    </footer>
-  `;
-}
 
 // ==========================================
 // REAL-TIME SIGNALING & WEBRTC WIRING
@@ -1678,33 +1381,7 @@ function bindLivePanelEvents(root) {
 // ==========================================
 
 function bindEvents(root) {
-  // 1. Mobile navigation drawer toggle
-  const mobileToggle = root.querySelector('.mobile-toggle');
-  const siteNav = root.querySelector('#site-nav');
-  if (mobileToggle && siteNav) {
-    mobileToggle.addEventListener('click', () => {
-      state.isMobileMenuOpen = !state.isMobileMenuOpen;
-      mobileToggle.setAttribute('aria-expanded', String(state.isMobileMenuOpen));
-      siteNav.classList.toggle('nav-open', state.isMobileMenuOpen);
-    });
-
-    siteNav.querySelectorAll('.nav-link').forEach((link) => {
-      link.addEventListener('click', () => {
-        state.isMobileMenuOpen = false;
-        mobileToggle.setAttribute('aria-expanded', 'false');
-        siteNav.classList.remove('nav-open');
-      });
-    });
-  }
-
-  // 2. Project roadmap dialog buttons
-  root.querySelectorAll('.roadmap-btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      openPhaseModal();
-    });
-  });
-
-  // 3. Real Room Creation Button (Phase 3 & 4)
+  // 1. Real Room Creation Button (Phase 3 & 4)
   const createRoomBtn = root.querySelector('#create-room-btn');
   if (createRoomBtn) {
     createRoomBtn.addEventListener('click', () => {
