@@ -29,50 +29,7 @@ import {
   filterClearableFiles,
 } from './utils/ui-helpers.js';
 
-/** Application state */
-const state = {
-  // Real signaling state (Phase 3)
-  signalingState: SIGNALING_STATES.IDLE,
-  realRoomCode: null,
-  realSessionId: null,
-  realRole: null,
-  peerSessionId: null,
-  signalingError: null,
-
-  // Real WebRTC state (Phase 4 & 5)
-  peerConnectionState: PEER_CONNECTION_STATES.IDLE,
-  dataChannelState: DATA_CHANNEL_STATES.IDLE,
-  fileChannelState: DATA_CHANNEL_STATES.IDLE,
-  realChatMessages: [], // In-memory only; never persisted to localStorage or database
-  realFiles: [],        // In-memory real file transfers
-  activeTransfer: null, // Currently streaming file transfer
-
-  // Network Resilience & Diagnostics (Phase 6)
-  isReconnecting: false,
-  reconnectAttempt: 0,
-  isDiagnosticsOpen: false,
-  connectionDiagnostics: {
-    connectionState: 'idle',
-    iceConnectionState: 'idle',
-    iceGatheringState: 'idle',
-    signalingState: 'idle',
-    selectedCandidateType: 'unknown',
-    isRelay: false,
-    candidatePairState: null,
-    roundTripTimeMs: null,
-    bytesSent: 0,
-    bytesReceived: 0,
-    reconnectAttempts: 0,
-    maxReconnectAttempts: 3,
-    hasTurnConfigured: Boolean(APP_CONFIG.iceConfig?.isTurnConfigured),
-  },
-
-  // UI state
-  isMobileMenuOpen: false,
-
-  // Demo Mockup Data
-  demoMessages: [...APP_CONFIG.demoData.sampleMessages],
-};
+import { state, resetSessionState } from './state/app-state.js';
 
 /** Render the complete Phase 4 UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -1680,34 +1637,7 @@ function bindLivePanelEvents(root) {
           peerConnectionService.close();
           signalingClient.leaveRoom();
 
-          state.realRoomCode = null;
-          state.realSessionId = null;
-          state.realRole = null;
-          state.peerSessionId = null;
-          state.peerConnectionState = PEER_CONNECTION_STATES.IDLE;
-          state.dataChannelState = DATA_CHANNEL_STATES.IDLE;
-          state.fileChannelState = DATA_CHANNEL_STATES.IDLE;
-          state.isReconnecting = false;
-          state.reconnectAttempt = 0;
-          state.isDiagnosticsOpen = false;
-          state.connectionDiagnostics = {
-            connectionState: 'idle',
-            iceConnectionState: 'idle',
-            iceGatheringState: 'idle',
-            signalingState: 'idle',
-            selectedCandidateType: 'unknown',
-            isRelay: false,
-            candidatePairState: null,
-            roundTripTimeMs: null,
-            bytesSent: 0,
-            bytesReceived: 0,
-            reconnectAttempts: 0,
-            maxReconnectAttempts: 3,
-            hasTurnConfigured: Boolean(APP_CONFIG.iceConfig?.isTurnConfigured),
-          };
-          state.realChatMessages = [];
-          state.realFiles = [];
-          state.activeTransfer = null;
+          resetSessionState(state);
 
           updateSessionUI(root);
           updateChatUI(root);
