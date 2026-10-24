@@ -28,6 +28,7 @@ from app.config import (
     ROOM_TTL_SECONDS,
 )
 from app.main import app
+from app.services.rate_limiter import ws_rate_limiter
 from app.services.room_manager import (
     InvalidInvitationError,
     InvitationAlreadyUsedError,
@@ -239,6 +240,7 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app, headers={"origin": "http://localhost:5173"})
         room_manager.rooms.clear()
+        ws_rate_limiter.reset()
 
     def test_room_created_delivers_invitation_to_host(self) -> None:
         """Verify host receives the secret invitation token in room-created WebSocket event."""
@@ -322,7 +324,7 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
                 self.assertEqual(err_event["payload"]["code"], "INVALID_INVITATION")
 
     def test_url_path_join_with_invitation_query_param(self) -> None:
-        """Verify /ws/{room_code}?invitation_token={token} works and joins as guest."""
+        """Verify /ws/{room_code}?invitation_token={token} is rejected with QUERY_PARAM_TOKEN_PROHIBITED."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
             created = host_ws.receive_json()
@@ -333,8 +335,8 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
             url = f"/ws/{room_code}?invitation_token={invitation_token}"
             with self.client.websocket_connect(url) as guest_ws:
                 guest_event = guest_ws.receive_json()
-                self.assertEqual(guest_event["type"], "peer-joined")
-                self.assertEqual(guest_event["payload"]["role"], "guest")
+                self.assertEqual(guest_event["type"], "error")
+                self.assertEqual(guest_event["payload"]["code"], "QUERY_PARAM_TOKEN_PROHIBITED")
 
     def test_url_path_join_without_invitation_is_closed(self) -> None:
         """Verify /ws/{room_code} without query param is closed with policy violation."""

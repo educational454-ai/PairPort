@@ -19,6 +19,7 @@ from app.config import (
     is_origin_allowed,
     normalize_origin,
 )
+from app.services.rate_limiter import ws_rate_limiter
 from app.services.room_manager import room_manager
 
 
@@ -28,6 +29,7 @@ class TestWebSocketOriginSecurity(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app)
         room_manager.rooms.clear()
+        ws_rate_limiter.reset()
 
     # -------------------------------------------------------------------------
     # Unit tests for normalize_origin and is_origin_allowed
@@ -168,7 +170,14 @@ class TestWebSocketOriginSecurity(unittest.TestCase):
 
             # Legitimate guest joins with allowed origin and valid invitation token
             guest_client = TestClient(app, headers={"origin": "http://127.0.0.1:5173"})
-            with guest_client.websocket_connect(f"/ws/{room_code}?invitation_token={invitation_token}") as guest_ws:
+            with guest_client.websocket_connect("/ws") as guest_ws:
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 guest_msg = guest_ws.receive_json()
                 self.assertEqual(guest_msg["type"], "peer-joined")
                 self.assertEqual(len(room.participants), 2)

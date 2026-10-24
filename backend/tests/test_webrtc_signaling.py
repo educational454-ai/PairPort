@@ -4,6 +4,7 @@ import unittest
 from starlette.testclient import TestClient
 
 from app.main import app
+from app.services.rate_limiter import ws_rate_limiter
 from app.services.room_manager import room_manager
 
 
@@ -12,6 +13,7 @@ class TestWebRTCSignalingRelay(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(app, headers={"origin": "http://localhost:5173"})
         room_manager.rooms.clear()
+        ws_rate_limiter.reset()
 
     def test_offer_and_answer_relay(self) -> None:
         """Verify host offer is relayed to guest, and guest answer is relayed to host."""

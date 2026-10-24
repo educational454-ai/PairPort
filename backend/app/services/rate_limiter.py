@@ -17,7 +17,7 @@ import math
 import time
 from typing import Callable
 
-from starlette.requests import Request
+from starlette.requests import HTTPConnection, Request
 
 from app.config import (
     REST_RATE_LIMIT_CHECK_ROOM_PER_MIN,
@@ -28,23 +28,25 @@ from app.config import (
 )
 
 
-def get_client_ip(request: Request) -> str:
-    """Extract direct client IP safely from request.
+def get_client_ip(connection: HTTPConnection) -> str:
+    """Extract direct client IP safely from Request or WebSocket.
 
-    Defaults to request.client.host. Does not trust X-Forwarded-For or
+    Defaults to connection.client.host. Does not trust X-Forwarded-For or
     similar headers unless PAIRPORT_TRUST_PROXY_HEADERS is explicitly enabled.
     Safely falls back to 'unknown' if client information is missing.
     """
-    if TRUST_PROXY_HEADERS:
-        x_forwarded_for = request.headers.get("x-forwarded-for")
+    import app.config as config
+    trust_proxy = globals().get("TRUST_PROXY_HEADERS", False) or getattr(config, "TRUST_PROXY_HEADERS", False)
+    if trust_proxy:
+        x_forwarded_for = connection.headers.get("x-forwarded-for")
         if x_forwarded_for:
             # First IP in X-Forwarded-For chain is the client
             client_ip = x_forwarded_for.split(",")[0].strip()
             if client_ip:
                 return client_ip
 
-    if request.client and request.client.host:
-        return request.client.host
+    if connection.client and connection.client.host:
+        return connection.client.host
     return "unknown"
 
 
@@ -137,3 +139,6 @@ class InMemoryRateLimiter:
 
 # Shared singleton rate limiter for REST room endpoints
 rest_rate_limiter = InMemoryRateLimiter()
+
+# Shared singleton rate limiter for WebSocket room operations (create / join)
+ws_rate_limiter = InMemoryRateLimiter()

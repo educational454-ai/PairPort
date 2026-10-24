@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import time
 from typing import Any
 
@@ -22,9 +23,13 @@ from app.config import (
     ROOM_TTL_SECONDS,
     WS_ACTION_LIMIT_ROOM_OPS,
     WS_RATE_LIMIT_BURST,
+    WS_RATE_LIMIT_CREATE_PER_MIN,
+    WS_RATE_LIMIT_JOIN_PER_MIN,
     WS_RATE_LIMIT_PER_SEC,
+    WS_RATE_LIMIT_WINDOW_SECONDS,
     is_origin_allowed,
 )
+from app.services.rate_limiter import get_client_ip, ws_rate_limiter
 from app.services.room_manager import (
     DuplicateConnectionError,
     InvalidInvitationError,
@@ -234,70 +239,73 @@ async def websocket_signaling_endpoint(
         await websocket.close(code=1008, reason=reason)
         return
 
+    client_ip = get_client_ip(websocket)
+
+    # If room_code was provided in the URL path, handle legacy path join
+    if room_code:
+        # Every path-based join attempt is subject to the shared IP join rate limit
+        allowed, retry_after = await ws_rate_limiter.acquire(
+            f"ws:join:{client_ip}",
+            WS_RATE_LIMIT_JOIN_PER_MIN,
+            WS_RATE_LIMIT_WINDOW_SECONDS,
+        )
+        if not allowed:
+            await websocket.accept()
+            await send_json(
+                websocket,
+                "error",
+                {
+                    "code": "RATE_LIMITED",
+                    "message": f"Too many room join attempts. Please wait {retry_after} seconds before retrying.",
+                    "retry_after": retry_after,
+                },
+            )
+            await websocket.close(code=1008, reason=f"Rate limit exceeded. Retry after {retry_after}s")
+            return
+
+        # Legacy URL path join token hardening:
+        # Query parameter invitation tokens are strictly prohibited on /ws/{room_code}
+        has_query_token = any(
+            k in websocket.query_params
+            for k in ("invitation_token", "token", "invite", "secret", "key")
+        )
+        if has_query_token:
+            await websocket.accept()
+            await send_json(
+                websocket,
+                "error",
+                {
+                    "code": "QUERY_PARAM_TOKEN_PROHIBITED",
+                    "message": (
+                        "Passing invitation tokens in URL query parameters is prohibited. "
+                        "Connect to /ws and supply the token in the join message payload."
+                    ),
+                },
+            )
+            await websocket.close(code=1008, reason="Invitation tokens in URL parameters prohibited")
+            return
+
+        # Without query parameter token, path-based join cannot join as guest
+        await websocket.accept()
+        await send_json(
+            websocket,
+            "error",
+            {
+                "code": "INVITATION_REQUIRED",
+                "message": (
+                    "Guest join requires an invitation token. "
+                    "Connect to /ws and supply the token in the join message payload."
+                ),
+            },
+        )
+        await websocket.close(code=1008, reason="Invitation required")
+        return
+
     await websocket.accept()
 
     current_room_code: str | None = None
     current_session_id: str | None = None
     rate_limiter = ConnectionRateLimiter()
-
-    # If room_code was provided in the URL path, attempt immediate join as guest
-    if room_code:
-        invitation_token = websocket.query_params.get("invitation_token")
-        try:
-            room, participant = await room_manager.join_room(
-                room_code,
-                websocket,
-                invitation_token=invitation_token,
-                role="guest",
-            )
-            current_room_code = room.code
-            current_session_id = participant.session_id
-
-            other = room.get_other_participant(current_session_id)
-            if other:
-                # Room now has two participants: notify both
-                await send_json(
-                    websocket,
-                    "peer-joined",
-                    {
-                        "room_code": room.code,
-                        "session_id": current_session_id,
-                        "role": participant.role,
-                        "peer_session_id": other.session_id,
-                        "message": "Connected to room peer.",
-                    },
-                )
-                await send_json(
-                    other.websocket,
-                    "peer-joined",
-                    {
-                        "room_code": room.code,
-                        "session_id": other.session_id,
-                        "role": other.role,
-                        "peer_session_id": current_session_id,
-                        "message": "Peer joined the room.",
-                    },
-                )
-            else:
-                # First participant in room
-                await send_json(
-                    websocket,
-                    "waiting",
-                    {
-                        "room_code": room.code,
-                        "session_id": current_session_id,
-                        "role": participant.role,
-                        "message": "Waiting for peer to join with this room code.",
-                    },
-                )
-        except RoomError as err:
-            await send_json(
-                websocket,
-                "error",
-                {"code": err.code, "message": str(err)},
-            )
-            await websocket.close(code=1008)
-            return
 
     try:
         while True:
@@ -378,13 +386,19 @@ async def websocket_signaling_endpoint(
             # 1. Action: CREATE
             # ----------------------------------------------------
             if msg_type == "create":
-                if not rate_limiter.allow_room_action():
+                allowed, retry_after = await ws_rate_limiter.acquire(
+                    f"ws:create:{client_ip}",
+                    WS_RATE_LIMIT_CREATE_PER_MIN,
+                    WS_RATE_LIMIT_WINDOW_SECONDS,
+                )
+                if not allowed:
                     await send_json(
                         websocket,
                         "error",
                         {
                             "code": "RATE_LIMITED",
-                            "message": "Too many room creation or join attempts. Please wait before retrying.",
+                            "message": f"Too many room creation attempts. Please wait {retry_after} seconds before retrying.",
+                            "retry_after": retry_after,
                         },
                     )
                     continue
@@ -442,16 +456,23 @@ async def websocket_signaling_endpoint(
             # 2. Action: JOIN
             # ----------------------------------------------------
             elif msg_type == "join":
-                if not rate_limiter.allow_room_action():
+                allowed, retry_after = await ws_rate_limiter.acquire(
+                    f"ws:join:{client_ip}",
+                    WS_RATE_LIMIT_JOIN_PER_MIN,
+                    WS_RATE_LIMIT_WINDOW_SECONDS,
+                )
+                if not allowed:
                     await send_json(
                         websocket,
                         "error",
                         {
                             "code": "RATE_LIMITED",
-                            "message": "Too many room creation or join attempts. Please wait before retrying.",
+                            "message": f"Too many room join attempts. Please wait {retry_after} seconds before retrying.",
+                            "retry_after": retry_after,
                         },
                     )
                     continue
+
                 if current_room_code:
                     await send_json(
                         websocket,
