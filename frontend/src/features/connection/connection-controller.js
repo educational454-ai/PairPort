@@ -13,6 +13,7 @@ import {
 } from '../../services/peer-connection.js';
 import { state, resetSessionState } from '../../state/app-state.js';
 import { formatTime } from '../../utils/ui-helpers.js';
+import { copyInvitationToClipboard } from '../../utils/invitation.js';
 import { updateSessionStatusUI } from './session-panel.js';
 import { updatePairingCardsUI, setPairingFeedback } from '../pairing/index.js';
 
@@ -76,6 +77,22 @@ export function bindSessionPanelEvents(root, { onLeaveRoom, toast = showToast } 
       } catch {
         toast(`Room code: ${state.realRoomCode}`, 'info', 3000);
       }
+    });
+  }
+
+  // 4. Copy live secure invitation link button
+  const copyLiveInviteBtn = root.querySelector('#copy-live-invite-btn');
+  const fallbackBoxEl = root.querySelector('#invitation-fallback-box');
+  const fallbackInputEl = root.querySelector('#fallback-invite-input');
+  if (copyLiveInviteBtn) {
+    copyLiveInviteBtn.addEventListener('click', async () => {
+      if (!state.realRoomCode || !state.invitationToken) return;
+      await copyInvitationToClipboard(state.realRoomCode, state.invitationToken, {
+        toast,
+        fallbackBoxEl,
+        fallbackInputEl,
+        buttonEl: copyLiveInviteBtn,
+      });
     });
   }
 }
@@ -170,6 +187,7 @@ export function initConnectionController(root = document, {
     state.realRoomCode = payload.room_code;
     state.realSessionId = payload.session_id;
     state.realRole = payload.role;
+    state.invitationToken = payload.invitation_token || null;
     toast(`Real room "${payload.room_code}" created on server!`, 'success');
   });
 
@@ -221,8 +239,18 @@ export function initConnectionController(root = document, {
   });
 
   signaling.on('error', (payload) => {
-    setPairingFeedback(root, payload.message || 'Failed to connect to room.', 'error');
-    toast(`Error: ${payload.message || 'Operation failed.'}`, 'warning', 4000);
+    let errorMsg = payload.message || 'Failed to connect to room.';
+    if (payload.code === 'INVITATION_ALREADY_USED') {
+      errorMsg = 'This invitation token has already been consumed. A fresh invitation from the host is required.';
+    } else if (payload.code === 'INVITATION_REQUIRED') {
+      errorMsg = 'An invitation token or valid invite link is required to join this room.';
+    } else if (payload.code === 'INVALID_INVITATION') {
+      errorMsg = 'The invitation token is invalid for this room.';
+    } else if (payload.code === 'INVITATION_EXPIRED') {
+      errorMsg = 'This invitation token has expired. Request a new invitation from the host.';
+    }
+    setPairingFeedback(root, errorMsg, 'error');
+    toast(`Error: ${errorMsg}`, 'warning', 5000);
   });
 
   // ----------------------------------------------------

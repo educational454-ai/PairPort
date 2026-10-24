@@ -24,6 +24,7 @@ export class SignalingClient {
     this.roomCode = null;
     this.sessionId = null;
     this.role = null;
+    this.invitationToken = null;
     this.peerSessionId = null;
     this.listeners = new Map();
     this.isExplicitLeave = false;
@@ -104,8 +105,8 @@ export class SignalingClient {
     });
   }
 
-  /** Connect to WebSocket and join an existing room as guest */
-  joinRoom(rawCode) {
+  /** Connect to WebSocket and join an existing room as guest with invitation token */
+  joinRoom(rawCode, invitationToken) {
     if (this.state === SIGNALING_STATES.CREATING || this.state === SIGNALING_STATES.JOINING) {
       return;
     }
@@ -116,12 +117,26 @@ export class SignalingClient {
       return;
     }
 
+    if (!invitationToken || typeof invitationToken !== 'string' || !invitationToken.trim()) {
+      this.setState(SIGNALING_STATES.ERROR, {
+        code: 'INVITATION_REQUIRED',
+        message: 'An invitation token or valid invite link is required to join this room.',
+      });
+      this.emit('error', {
+        code: 'INVITATION_REQUIRED',
+        message: 'An invitation token or valid invite link is required to join this room.',
+      });
+      return;
+    }
+
+    const token = invitationToken.trim();
     this.leaveRoom();
     this.isExplicitLeave = false;
+    this.invitationToken = token;
     this.setState(SIGNALING_STATES.JOINING);
 
     this._connect((ws) => {
-      this._send(ws, 'join', { room_code: code });
+      this._send(ws, 'join', { room_code: code, invitation_token: token });
     });
   }
 
@@ -178,6 +193,7 @@ export class SignalingClient {
     this.roomCode = null;
     this.sessionId = null;
     this.role = null;
+    this.invitationToken = null;
     this.peerSessionId = null;
 
     if (this.state !== SIGNALING_STATES.IDLE) {
@@ -261,6 +277,7 @@ export class SignalingClient {
         this.roomCode = payload.room_code;
         this.sessionId = payload.session_id;
         this.role = payload.role;
+        this.invitationToken = payload.invitation_token || null;
         this.emit('roomCreated', payload);
         break;
       }

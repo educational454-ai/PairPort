@@ -39,11 +39,12 @@ export function createDefaultDiagnostics() {
  */
 export function createInitialState() {
   return {
-    // Real signaling state (Phase 3)
+    // Real signaling state (Phase 3 & 9F)
     signalingState: SIGNALING_STATES.IDLE,
     realRoomCode: null,
     realSessionId: null,
     realRole: null,
+    invitationToken: null, // In-memory only; never persisted in localStorage or logs
     peerSessionId: null,
     signalingError: null,
 
@@ -87,6 +88,7 @@ export function resetSessionState(target = state) {
   target.realRoomCode = null;
   target.realSessionId = null;
   target.realRole = null;
+  target.invitationToken = null;
   target.peerSessionId = null;
   target.signalingError = null;
 

@@ -5,6 +5,9 @@
 let toastContainer = null;
 
 function ensureContainer() {
+  if (typeof document === 'undefined' || !document.body) {
+    return null;
+  }
   if (!toastContainer || !document.body.contains(toastContainer)) {
     toastContainer = document.createElement('div');
     toastContainer.className = 'toast-container';
@@ -23,6 +26,7 @@ function ensureContainer() {
  */
 export function showToast(message, type = 'info', duration = 3600) {
   const container = ensureContainer();
+  if (!container) return;
 
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;

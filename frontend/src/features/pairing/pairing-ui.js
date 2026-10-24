@@ -99,13 +99,23 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
               <span class="code-label">Room Code (Host Mode)</span>
               <div class="code-display-row">
                 <code id="display-room-code" class="room-code-tag">${displayCode}</code>
-                <button type="button" id="copy-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy room code" ${!state.realRoomCode ? 'disabled' : ''}>
-                  <span class="copy-icon-wrap">${icons.copy(18)}</span>
-                  <span class="copy-btn-text">Copy code</span>
-                </button>
+                <div class="code-actions-group">
+                  <button type="button" id="copy-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy room code" ${!state.realRoomCode ? 'disabled' : ''}>
+                    <span class="copy-icon-wrap">${icons.copy(18)}</span>
+                    <span class="copy-btn-text">Copy code</span>
+                  </button>
+                  <button type="button" id="copy-invite-btn" class="btn btn-secondary btn-copy btn-copy-invite" aria-label="Copy invitation link" ${!(state.realRoomCode && state.invitationToken) ? 'disabled' : ''}>
+                    <span class="copy-icon-wrap">${icons.sparkles(16)}</span>
+                    <span class="copy-invite-btn-text">Copy invite link</span>
+                  </button>
+                </div>
+              </div>
+              <div id="invitation-fallback-box" class="invitation-fallback-box hidden" aria-live="polite">
+                <label for="fallback-invite-input" class="fallback-label">Select and copy invitation URL:</label>
+                <input type="text" id="fallback-invite-input" class="form-input fallback-input" readonly spellcheck="false" />
               </div>
               <p class="code-helper-text">
-                Creates a session on the signaling server and waits for one peer to establish the WebRTC handshake.
+                Creates a session on the signaling server and generates a secure guest invitation link.
               </p>
             </div>
 
@@ -125,20 +135,20 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
               </div>
               <div class="card-title-group">
                 <h3 class="card-title">Join a room</h3>
-                <p class="card-subtext">Enter the room code provided by your peer.</p>
+                <p class="card-subtext">Enter the room code or invite link provided by your peer.</p>
               </div>
             </div>
 
             <form id="join-room-form" class="join-form" novalidate>
               <div class="form-field">
-                <label for="room-code-input" class="form-label">Room Code</label>
+                <label for="room-code-input" class="form-label">Room Code or Invite Link</label>
                 <div class="input-wrapper">
                   <input
                     type="text"
                     id="room-code-input"
                     class="form-input code-input"
-                    placeholder="e.g. PORT-7K2M9X"
-                    maxlength="16"
+                    placeholder="e.g. PORT-7K2M9X or paste invite link"
+                    maxlength="256"
                     autocomplete="off"
                     spellcheck="false"
                     aria-describedby="join-code-feedback"
@@ -148,7 +158,7 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
                   </button>
                 </div>
                 <div id="join-code-feedback" class="form-feedback" aria-live="polite"></div>
-                <p class="input-helper">Codes are formatted like <code>PORT-XXXXXX</code> or 6 letters/digits.</p>
+                <p class="input-helper">Paste a secure invitation link or enter code with authorized token.</p>
               </div>
 
               <div class="card-actions">
@@ -182,6 +192,11 @@ export function updatePairingCardsUI(root, currentState = state) {
   const copyBtn = root.querySelector('#copy-code-btn');
   if (copyBtn) {
     copyBtn.disabled = !currentState.realRoomCode;
+  }
+
+  const copyInviteBtn = root.querySelector('#copy-invite-btn');
+  if (copyInviteBtn) {
+    copyInviteBtn.disabled = !(currentState.realRoomCode && currentState.invitationToken);
   }
 
   const cardsGrid = root.querySelector('#pairing-cards-grid');

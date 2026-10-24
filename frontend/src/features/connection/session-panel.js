@@ -162,10 +162,18 @@ export function renderLiveSessionPanel(currentState = state) {
             <span class="live-code-label">Active Room Code</span>
             <span class="live-code-val" id="active-live-code">${escapeHtml(currentState.realRoomCode)}</span>
           </div>
-          <button type="button" id="copy-live-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy active room code">
-            ${icons.copy(18)}
-            <span class="copy-live-text">Copy code</span>
-          </button>
+          <div class="code-actions-group">
+            <button type="button" id="copy-live-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy active room code">
+              ${icons.copy(18)}
+              <span class="copy-live-text">Copy code</span>
+            </button>
+            ${currentState.invitationToken ? `
+              <button type="button" id="copy-live-invite-btn" class="btn btn-primary btn-copy btn-copy-invite" aria-label="Copy secure invite link">
+                ${icons.sparkles(16)}
+                <span class="copy-live-invite-text">Copy Invite Link</span>
+              </button>
+            ` : ''}
+          </div>
         </div>
       ` : ''}
 

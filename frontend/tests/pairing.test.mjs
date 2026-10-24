@@ -10,7 +10,7 @@ import {
   setPairingFeedback,
 } from '../src/features/pairing/index.js';
 import { SIGNALING_STATES } from '../src/services/signaling.js';
-import { createInitialState } from '../src/state/app-state.js';
+import { createInitialState, state } from '../src/state/app-state.js';
 
 describe('1. renderPairingSection', () => {
   it('renders pairing section, onboarding guide, live session container slot, and cards', () => {
@@ -137,10 +137,14 @@ describe('5. initPairing and setPairingFeedback', () => {
   it('wires up room creation and join form submit handlers idempotently', () => {
     let created = false;
     let joinedCode = null;
+    let joinedToken = null;
 
     const mockSignaling = {
       createRoom: () => { created = true; },
-      joinRoom: (code) => { joinedCode = code; },
+      joinRoom: (code, token) => {
+        joinedCode = code;
+        joinedToken = token;
+      },
     };
 
     let createHandler = null;
@@ -155,6 +159,15 @@ describe('5. initPairing and setPairingFeedback', () => {
         }
         if (sel === '#copy-code-btn') {
           return { addEventListener: () => {} };
+        }
+        if (sel === '#copy-invite-btn') {
+          return { addEventListener: () => {} };
+        }
+        if (sel === '#invitation-fallback-box') {
+          return null;
+        }
+        if (sel === '#fallback-invite-input') {
+          return null;
         }
         if (sel === '#paste-sample-code-btn') {
           return { addEventListener: () => {} };
@@ -180,7 +193,8 @@ describe('5. initPairing and setPairingFeedback', () => {
       querySelector: (sel) => (sel === '#pairing' ? fakeSection : null),
     };
 
-    initPairing(fakeRoot, { signaling: mockSignaling });
+    state.invitationToken = null;
+    initPairing(fakeRoot, { signaling: mockSignaling, toast: () => {} });
     assert.equal(fakeSection.dataset.pairingInitialized, 'true');
     assert.ok(typeof createHandler === 'function');
     assert.ok(typeof submitHandler === 'function');
@@ -189,12 +203,19 @@ describe('5. initPairing and setPairingFeedback', () => {
     createHandler();
     assert.equal(created, true);
 
-    // Trigger join form submit
+    // Trigger join form submit WITHOUT token: must NOT call joinRoom
+    submitHandler({ preventDefault: () => {} });
+    assert.equal(joinedCode, null, 'Must reject room-code-only join when token is missing');
+
+    // Trigger join form submit WITH authorized token: must call joinRoom with code and token
+    state.invitationToken = 'test-token-1234567890abcdef';
     submitHandler({ preventDefault: () => {} });
     assert.equal(joinedCode, 'PORT-XYZ9');
+    assert.equal(joinedToken, 'test-token-1234567890abcdef');
+    state.invitationToken = null;
 
     // Idempotency: calling again should return early
-    initPairing(fakeRoot, { signaling: mockSignaling });
+    initPairing(fakeRoot, { signaling: mockSignaling, toast: () => {} });
     assert.equal(fakeSection.dataset.pairingInitialized, 'true');
   });
 });

@@ -1112,6 +1112,59 @@ input:disabled,
   font-size: 0.84rem;
 }
 
+.code-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-copy-invite {
+  background: rgba(139, 92, 246, 0.15);
+  border-color: rgba(139, 92, 246, 0.4);
+  color: #c4b5fd;
+}
+
+.btn-copy-invite:hover:not(:disabled) {
+  background: rgba(139, 92, 246, 0.28);
+  border-color: rgba(139, 92, 246, 0.6);
+  color: #ffffff;
+}
+
+.invitation-fallback-box {
+  margin-top: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--bg-card-subtle);
+  border: 1px dashed rgba(139, 92, 246, 0.4);
+  border-radius: var(--radius-md);
+}
+
+.invitation-fallback-box.hidden,
+.hidden {
+  display: none !important;
+}
+
+.fallback-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.fallback-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: #c4b5fd;
+  cursor: text;
+}
+
 .code-helper-text {
   font-size: 0.8125rem;
   color: var(--text-secondary);

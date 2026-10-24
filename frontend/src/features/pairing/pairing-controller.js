@@ -8,10 +8,15 @@ import { signalingClient } from '../../services/signaling.js';
 import { showToast } from '../../components/toast.js';
 import { state } from '../../state/app-state.js';
 import { validateRoomCode } from '../../utils/ui-helpers.js';
+import {
+  parseInvitation,
+  parseAndClearLocationInvitation,
+  copyInvitationToClipboard,
+} from '../../utils/invitation.js';
 import { setFeedback } from './pairing-ui.js';
 
 /**
- * Validate current room code input in real-time and render visual feedback.
+ * Validate current room code or invitation input in real-time and render visual feedback.
  *
  * @param {HTMLInputElement} inputEl - Room code input element
  * @param {HTMLElement} feedbackEl - Target feedback container
@@ -23,6 +28,21 @@ export function validateJoinInput(inputEl, feedbackEl) {
     setFeedback(feedbackEl, '', 'clear');
     return;
   }
+
+  // Check if user input is an invitation URL, fragment, or query
+  if (val.includes('#') || val.includes('?') || val.includes('token=') || val.length > 16) {
+    const invite = parseInvitation(val);
+    if (invite.isValid) {
+      state.invitationToken = invite.invitationToken;
+      inputEl.value = invite.roomCode;
+      setFeedback(feedbackEl, `Secure invitation verified for room ${invite.roomCode}. Click Join to connect.`, 'success');
+      return;
+    } else if (invite.error === 'INVALID_TOKEN_FORMAT') {
+      setFeedback(feedbackEl, 'Invitation token format is invalid.', 'error');
+      return;
+    }
+  }
+
   const result = validateRoomCode(val);
   if (!result.isValid) {
     setFeedback(feedbackEl, result.message, 'warning');
@@ -54,15 +74,45 @@ export function setPairingFeedback(root, message, type = 'error') {
  * @param {object} [options]
  * @param {object} [options.signaling=signalingClient] - Signaling client service
  * @param {Function} [options.toast=showToast] - Toast notification function
+ * @param {Location} [options.location] - Optional location override for testing
+ * @param {History} [options.history] - Optional history override for testing
  */
-export function initPairing(root = document, { signaling = signalingClient, toast = showToast } = {}) {
+export function initPairing(
+  root = document,
+  {
+    signaling = signalingClient,
+    toast = showToast,
+    location,
+    history,
+  } = {},
+) {
   const pairingSection = root.querySelector('#pairing');
   if (!pairingSection || pairingSection.dataset.pairingInitialized === 'true') {
     return;
   }
   pairingSection.dataset.pairingInitialized = 'true';
 
-  // 1. Real Room Creation Button (Phase 3 & 4)
+  const roomCodeInput = pairingSection.querySelector('#room-code-input');
+  const feedbackEl = pairingSection.querySelector('#join-code-feedback');
+
+  // 0. Auto-detect invitation in URL fragment (#join?room=...&token=...)
+  const locationInvite = parseAndClearLocationInvitation(location, history);
+  if (locationInvite) {
+    state.invitationToken = locationInvite.invitationToken;
+    if (roomCodeInput) {
+      roomCodeInput.value = locationInvite.roomCode;
+    }
+    if (feedbackEl) {
+      setFeedback(
+        feedbackEl,
+        `Secure invitation loaded for room ${locationInvite.roomCode}. Click Join to connect.`,
+        'success',
+      );
+    }
+    toast(`Loaded invitation for room ${locationInvite.roomCode}`, 'info', 3000);
+  }
+
+  // 1. Real Room Creation Button
   const createRoomBtn = pairingSection.querySelector('#create-room-btn');
   if (createRoomBtn) {
     createRoomBtn.addEventListener('click', () => {
@@ -98,10 +148,34 @@ export function initPairing(root = document, { signaling = signalingClient, toas
     });
   }
 
+  // 2b. Copy Invite Link button on Create card
+  const copyInviteBtn = pairingSection.querySelector('#copy-invite-btn');
+  const fallbackBoxEl = pairingSection.querySelector('#invitation-fallback-box');
+  const fallbackInputEl = pairingSection.querySelector('#fallback-invite-input');
+  if (copyInviteBtn) {
+    copyInviteBtn.addEventListener('click', async () => {
+      const code = state.realRoomCode;
+      const token = state.invitationToken;
+      if (!code || !token) {
+        toast('Create a room first to generate an invitation link.', 'info', 3000);
+        return;
+      }
+      await copyInvitationToClipboard(code, token, {
+        toast,
+        fallbackBoxEl,
+        fallbackInputEl,
+        buttonEl: copyInviteBtn,
+      });
+    });
+  }
+  if (fallbackInputEl) {
+    fallbackInputEl.addEventListener('click', () => {
+      fallbackInputEl.select();
+    });
+  }
+
   // 3. Join Room: Use sample code quick helper
   const pasteSampleBtn = pairingSection.querySelector('#paste-sample-code-btn');
-  const roomCodeInput = pairingSection.querySelector('#room-code-input');
-  const feedbackEl = pairingSection.querySelector('#join-code-feedback');
   if (pasteSampleBtn && roomCodeInput) {
     pasteSampleBtn.addEventListener('click', () => {
       roomCodeInput.value = state.realRoomCode || APP_CONFIG.demoData.roomCode;
@@ -110,18 +184,33 @@ export function initPairing(root = document, { signaling = signalingClient, toas
     });
   }
 
-  // 4. Join Room Form submission & uppercase auto-formatting
+  // 4. Join Room Form submission & input handling
   const joinForm = pairingSection.querySelector('#join-room-form');
   if (joinForm && roomCodeInput && feedbackEl) {
     roomCodeInput.addEventListener('input', () => {
-      roomCodeInput.value = roomCodeInput.value.toUpperCase();
+      const val = roomCodeInput.value.trim();
+      // Only auto-uppercase if not a full URL or query string with case-sensitive token
+      if (!val.includes('#') && !val.includes('?') && !val.includes('http') && !val.includes('token=')) {
+        roomCodeInput.value = roomCodeInput.value.toUpperCase();
+      }
       validateJoinInput(roomCodeInput, feedbackEl);
     });
 
     joinForm.addEventListener('submit', (e) => {
       e.preventDefault();
-      const code = roomCodeInput.value.trim();
-      const result = validateRoomCode(code);
+      const rawVal = roomCodeInput.value.trim();
+
+      // Check if user submitted full invitation URL or fragment
+      if (rawVal.includes('#') || rawVal.includes('?') || rawVal.includes('token=')) {
+        const invite = parseInvitation(rawVal);
+        if (invite.isValid && invite.invitationToken) {
+          state.invitationToken = invite.invitationToken;
+          roomCodeInput.value = invite.roomCode;
+        }
+      }
+
+      const codeVal = roomCodeInput.value.trim();
+      const result = validateRoomCode(codeVal);
 
       if (!result.isValid) {
         setFeedback(feedbackEl, result.message, 'error');
@@ -129,8 +218,20 @@ export function initPairing(root = document, { signaling = signalingClient, toas
         return;
       }
 
-      setFeedback(feedbackEl, `Attempting to join room "${result.code}"...`, 'warning');
-      signaling.joinRoom(result.code);
+      const token = state.invitationToken;
+      if (!token) {
+        setFeedback(
+          feedbackEl,
+          'An authorized invitation link or token is required to join this room.',
+          'error',
+        );
+        toast('Invitation required: Please use the invitation link provided by the host.', 'error', 4000);
+        roomCodeInput.focus();
+        return;
+      }
+
+      setFeedback(feedbackEl, `Attempting to join room "${result.code}" with invitation...`, 'warning');
+      signaling.joinRoom(result.code, token);
     });
   }
 }
