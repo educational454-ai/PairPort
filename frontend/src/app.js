@@ -21,7 +21,6 @@ import {
   TRANSFER_STATES,
 } from './services/peer-connection.js';
 import {
-  validateRoomCode,
   formatFileSize,
   formatTime,
   escapeHtml,
@@ -37,6 +36,12 @@ import {
   renderHowItWorks,
   renderFooter,
 } from './features/layout/index.js';
+import {
+  renderPairingSection,
+  updatePairingCardsUI,
+  initPairing,
+  setPairingFeedback,
+} from './features/pairing/index.js';
 
 /** Render the complete Phase 4 UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -52,7 +57,7 @@ export function startApp(root = document.querySelector('#app')) {
         ${renderHero()}
         ${renderFeatures()}
         ${renderHowItWorks()}
-        ${renderPairingSection()}
+        ${renderPairingSection({ liveSessionHtml: renderLiveSessionPanel() })}
         ${renderWorkspaceSection()}
       </main>
       ${renderFooter()}
@@ -61,6 +66,9 @@ export function startApp(root = document.querySelector('#app')) {
 
   // Initialize navbar interactions (mobile menu toggle & roadmap trigger)
   initNavbar(root);
+
+  // Initialize pairing interactions (create room, join room, validation, copy code)
+  initPairing(root);
 
   // Initialize roadmap modal
   initModal();
@@ -78,141 +86,6 @@ export function startApp(root = document.querySelector('#app')) {
 // ==========================================
 // RENDER HELPERS
 // ==========================================
-
-function renderPairingSection() {
-  return `
-    <section id="pairing" class="pairing-section" aria-labelledby="pairing-heading">
-      <div class="section-container">
-        <div class="section-header">
-          <span class="section-eyebrow">ROOM PAIRING & WEBRTC HANDSHAKE</span>
-          <h2 id="pairing-heading" class="section-title">Pair with a peer</h2>
-          <p class="section-subtitle">
-            Create a room or enter a code to establish a direct WebRTC data connection.
-          </p>
-        </div>
-
-        <!-- Quick Start Onboarding Guide (Step 2) -->
-        <div class="quick-start-guide" role="region" aria-label="First-time quick start guide">
-          <div class="quick-start-header">
-            <span class="quick-start-title">
-              ${icons.sparkles(16)}
-              <span>How to connect with a peer</span>
-            </span>
-            <span class="quick-start-badge">Direct WebRTC · Zero Server Storage</span>
-          </div>
-          <div class="quick-start-steps">
-            <div class="guide-step">
-              <span class="guide-step-num">1</span>
-              <div class="guide-step-body">
-                <strong>Host or Join</strong>
-                <p>Click "Create Room" to generate a code, or enter your peer's room code to join.</p>
-              </div>
-            </div>
-            <div class="guide-step">
-              <span class="guide-step-num">2</span>
-              <div class="guide-step-body">
-                <strong>Share Room Code</strong>
-                <p>Send the 6-character code to your peer. WebRTC pairing negotiates automatically.</p>
-              </div>
-            </div>
-            <div class="guide-step">
-              <span class="guide-step-num">3</span>
-              <div class="guide-step-body">
-                <strong>Direct P2P Session</strong>
-                <p>Once paired, stream files directly up to 100 MB and chat with zero server logging.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Live Session Container (dynamic based on signaling & peer connection state) -->
-        <div id="live-session-container">
-          ${renderLiveSessionPanel()}
-        </div>
-
-        <!-- Create & Join Cards Grid -->
-        <div id="pairing-cards-grid" class="pairing-grid ${state.signalingState !== SIGNALING_STATES.IDLE ? 'collapsed' : ''}">
-          <!-- Create Room Card -->
-          <div class="pairing-card create-card">
-            <div class="card-header">
-              <div class="card-icon-box">
-                ${icons.sparkles(22)}
-              </div>
-              <div class="card-title-group">
-                <h3 class="card-title">Create a room</h3>
-                <p class="card-subtext">Host a session and share the server-generated code with your peer.</p>
-              </div>
-            </div>
-
-            <div class="code-generator-box">
-              <span class="code-label">Room Code (Host Mode)</span>
-              <div class="code-display-row">
-                <code id="display-room-code" class="room-code-tag">${state.realRoomCode || 'PORT-????'}</code>
-                <button type="button" id="copy-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy room code" ${!state.realRoomCode ? 'disabled' : ''}>
-                  <span class="copy-icon-wrap">${icons.copy(18)}</span>
-                  <span class="copy-btn-text">Copy code</span>
-                </button>
-              </div>
-              <p class="code-helper-text">
-                Creates a session on the signaling server and waits for one peer to establish the WebRTC handshake.
-              </p>
-            </div>
-
-            <div class="card-actions">
-              <button type="button" id="create-room-btn" class="btn btn-primary btn-full">
-                ${icons.refresh(18)}
-                <span id="create-room-btn-text">Create Room (Host Session)</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- Join Room Card -->
-          <div class="pairing-card join-card">
-            <div class="card-header">
-              <div class="card-icon-box">
-                ${icons.user(22)}
-              </div>
-              <div class="card-title-group">
-                <h3 class="card-title">Join a room</h3>
-                <p class="card-subtext">Enter the room code provided by your peer.</p>
-              </div>
-            </div>
-
-            <form id="join-room-form" class="join-form" novalidate>
-              <div class="form-field">
-                <label for="room-code-input" class="form-label">Room Code</label>
-                <div class="input-wrapper">
-                  <input
-                    type="text"
-                    id="room-code-input"
-                    class="form-input code-input"
-                    placeholder="e.g. PORT-7K2M"
-                    maxlength="16"
-                    autocomplete="off"
-                    spellcheck="false"
-                    aria-describedby="join-code-feedback"
-                  />
-                  <button type="button" id="paste-sample-code-btn" class="input-inline-btn" title="Paste demo code">
-                    Use Sample
-                  </button>
-                </div>
-                <div id="join-code-feedback" class="form-feedback" aria-live="polite"></div>
-                <p class="input-helper">Codes are formatted like <code>PORT-XXXX</code> or 6 letters/digits.</p>
-              </div>
-
-              <div class="card-actions">
-                <button type="submit" id="join-room-btn" class="btn btn-primary btn-full">
-                  <span id="join-room-btn-text">Join Room</span>
-                  ${icons.arrowRight(16)}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      </div>
-    </section>
-  `;
-}
 
 function renderLiveSessionPanel() {
   if (state.signalingState === SIGNALING_STATES.IDLE) {
@@ -864,44 +737,11 @@ function bindSignalingEvents(root) {
       bindLivePanelEvents(root);
     }
 
-    const displayCode = root.querySelector('#display-room-code');
-    if (displayCode) {
-      displayCode.textContent = state.realRoomCode || 'PORT-????';
-    }
-
-    const copyBtn = root.querySelector('#copy-code-btn');
-    if (copyBtn) {
-      copyBtn.disabled = !state.realRoomCode;
-    }
+    updatePairingCardsUI(root);
 
     const workspaceCode = root.querySelector('#workspace-room-code');
     if (workspaceCode) {
       workspaceCode.textContent = state.realRoomCode || 'Not Connected';
-    }
-
-    // Toggle button loading states
-    const createBtn = root.querySelector('#create-room-btn');
-    const createBtnText = root.querySelector('#create-room-btn-text');
-    if (createBtn && createBtnText) {
-      if (state.signalingState === SIGNALING_STATES.CREATING) {
-        createBtn.classList.add('loading');
-        createBtnText.textContent = 'Connecting to signaling...';
-      } else {
-        createBtn.classList.remove('loading');
-        createBtnText.textContent = 'Create Room (Host Session)';
-      }
-    }
-
-    const joinBtn = root.querySelector('#join-room-btn');
-    const joinBtnText = root.querySelector('#join-room-btn-text');
-    if (joinBtn && joinBtnText) {
-      if (state.signalingState === SIGNALING_STATES.JOINING) {
-        joinBtn.classList.add('loading');
-        joinBtnText.textContent = 'Connecting to room...';
-      } else {
-        joinBtn.classList.remove('loading');
-        joinBtnText.textContent = 'Join Room';
-      }
     }
   };
 
@@ -968,10 +808,7 @@ function bindSignalingEvents(root) {
   });
 
   signalingClient.on('error', (payload) => {
-    const feedbackEl = root.querySelector('#join-code-feedback');
-    if (feedbackEl) {
-      setFeedback(feedbackEl, payload.message || 'Failed to connect to room.', 'error');
-    }
+    setPairingFeedback(root, payload.message || 'Failed to connect to room.', 'error');
     showToast(`Error: ${payload.message || 'Operation failed.'}`, 'warning', 4000);
   });
 }
@@ -1381,79 +1218,7 @@ function bindLivePanelEvents(root) {
 // ==========================================
 
 function bindEvents(root) {
-  // 1. Real Room Creation Button (Phase 3 & 4)
-  const createRoomBtn = root.querySelector('#create-room-btn');
-  if (createRoomBtn) {
-    createRoomBtn.addEventListener('click', () => {
-      signalingClient.createRoom();
-    });
-  }
-
-  // 4. Copy Code button on Create card
-  const copyBtn = root.querySelector('#copy-code-btn');
-  if (copyBtn) {
-    copyBtn.addEventListener('click', async () => {
-      const codeToCopy = state.realRoomCode;
-      if (!codeToCopy) return;
-
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(codeToCopy);
-        }
-        showToast(`Copied room code "${codeToCopy}" to clipboard!`, 'success', 3000);
-        const textSpan = copyBtn.querySelector('.copy-btn-text');
-        if (textSpan) {
-          const original = textSpan.textContent;
-          textSpan.textContent = 'Copied! ✓';
-          copyBtn.classList.add('copied');
-          setTimeout(() => {
-            textSpan.textContent = original;
-            copyBtn.classList.remove('copied');
-          }, 2000);
-        }
-      } catch {
-        showToast(`Room code: ${codeToCopy}`, 'info', 3000);
-      }
-    });
-  }
-
-  // 5. Join Room: Use sample code quick helper
-  const pasteSampleBtn = root.querySelector('#paste-sample-code-btn');
-  const roomCodeInput = root.querySelector('#room-code-input');
-  const feedbackEl = root.querySelector('#join-code-feedback');
-  if (pasteSampleBtn && roomCodeInput) {
-    pasteSampleBtn.addEventListener('click', () => {
-      roomCodeInput.value = state.realRoomCode || APP_CONFIG.demoData.roomCode;
-      roomCodeInput.focus();
-      validateJoinInput(roomCodeInput, feedbackEl);
-    });
-  }
-
-  // 6. Join Room Form submission
-  const joinForm = root.querySelector('#join-room-form');
-  if (joinForm && roomCodeInput && feedbackEl) {
-    roomCodeInput.addEventListener('input', () => {
-      roomCodeInput.value = roomCodeInput.value.toUpperCase();
-      validateJoinInput(roomCodeInput, feedbackEl);
-    });
-
-    joinForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const code = roomCodeInput.value.trim();
-      const result = validateRoomCode(code);
-
-      if (!result.isValid) {
-        setFeedback(feedbackEl, result.message, 'error');
-        roomCodeInput.focus();
-        return;
-      }
-
-      setFeedback(feedbackEl, `Attempting to join room "${result.code}"...`, 'warning');
-      signalingClient.joinRoom(result.code);
-    });
-  }
-
-  // 7. Ephemeral Chat Form interaction (Phase 4: Real WebRTC Chat)
+  // 1. Ephemeral Chat Form interaction (Phase 4: Real WebRTC Chat)
   const chatForm = root.querySelector('#chat-form');
   const chatInput = root.querySelector('#chat-input');
   const charCounter = root.querySelector('#char-counter');
@@ -1680,26 +1445,4 @@ function bindEvents(root) {
   }
 }
 
-// ==========================================
-// UTILITY HELPERS
-// ==========================================
 
-function validateJoinInput(inputEl, feedbackEl) {
-  const val = inputEl.value.trim();
-  if (!val) {
-    setFeedback(feedbackEl, '', 'clear');
-    return;
-  }
-  const result = validateRoomCode(val);
-  if (!result.isValid) {
-    setFeedback(feedbackEl, result.message, 'warning');
-  } else {
-    setFeedback(feedbackEl, 'Format looks valid. Click Join to connect.', 'success');
-  }
-}
-
-function setFeedback(el, message, type) {
-  if (!el) return;
-  el.textContent = message;
-  el.className = `form-feedback feedback-${type}`;
-}
