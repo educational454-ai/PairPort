@@ -13,7 +13,7 @@ import {
   PEER_CONNECTION_STATES,
   DATA_CHANNEL_STATES,
 } from '../src/services/peer-connection.js';
-import { createInitialState } from '../src/state/app-state.js';
+import { createInitialState, state } from '../src/state/app-state.js';
 
 describe('1. computeSessionStatusInfo', () => {
   it('returns idle status info when session is idle', () => {
@@ -236,5 +236,46 @@ describe('5. initConnectionController', () => {
       peerConnection: fakePeerConnection,
     });
     assert.equal(typeof controller2.refreshSessionUI, 'function');
+  });
+
+  it('revokes in-memory blob URLs and resets active transfer when peerLeft fires', () => {
+    const signalingListeners = {};
+    const fakeSignaling = {
+      on: (event, handler) => { signalingListeners[event] = handler; },
+      leaveRoom: () => {},
+    };
+    const fakePeerConnection = {
+      on: () => {},
+      close: () => {},
+      isFileChannelReady: () => false,
+    };
+    const fakeRoot = {
+      nodeType: 1,
+      dataset: {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
+    };
+
+    let revokedUrl = null;
+    const origRevoke = globalThis.URL?.revokeObjectURL;
+    globalThis.URL = globalThis.URL || {};
+    globalThis.URL.revokeObjectURL = (url) => { revokedUrl = url; };
+
+    initConnectionController(fakeRoot, {
+      signaling: fakeSignaling,
+      peerConnection: fakePeerConnection,
+      toast: () => {},
+    });
+
+    state.realFiles = [{ id: 'f1', blobUrl: 'blob:http://localhost:5173/sample-blob' }];
+    state.activeTransfer = { id: 'tx1' };
+
+    signalingListeners.peerLeft();
+
+    assert.equal(revokedUrl, 'blob:http://localhost:5173/sample-blob');
+    assert.equal(state.realFiles.length, 0);
+    assert.equal(state.activeTransfer, null);
+
+    if (origRevoke) globalThis.URL.revokeObjectURL = origRevoke;
   });
 });

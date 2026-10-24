@@ -195,6 +195,13 @@ export function initConnectionController(root = document, {
     state.peerSessionId = null;
     peerConnection.close();
 
+    state.realFiles.forEach((f) => {
+      if (f.blobUrl) {
+        try { URL.revokeObjectURL(f.blobUrl); } catch {}
+        f.blobUrl = null;
+      }
+    });
+
     state.realFiles = [];
     state.activeTransfer = null;
     state.fileChannelState = DATA_CHANNEL_STATES.IDLE;

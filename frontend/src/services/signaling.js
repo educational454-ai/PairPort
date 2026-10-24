@@ -159,15 +159,20 @@ export class SignalingClient {
     this.isExplicitLeave = true;
 
     if (this.ws) {
+      const closingWs = this.ws;
+      this.ws = null;
       try {
-        if (this.ws.readyState === WebSocket.OPEN) {
-          this._send(this.ws, 'leave');
+        if (closingWs.readyState === WebSocket.OPEN) {
+          this._send(closingWs, 'leave');
         }
-        this.ws.close(1000, 'User left session');
+        closingWs.onopen = null;
+        closingWs.onmessage = null;
+        closingWs.onerror = null;
+        closingWs.onclose = null;
+        closingWs.close(1000, 'User left session');
       } catch {
         // Ignore close errors
       }
-      this.ws = null;
     }
 
     this.roomCode = null;
@@ -182,19 +187,23 @@ export class SignalingClient {
 
   _connect(onOpenCallback) {
     try {
-      this.ws = new WebSocket(this.endpoint);
+      const socket = new WebSocket(this.endpoint);
+      this.ws = socket;
 
-      this.ws.onopen = () => {
-        if (typeof onOpenCallback === 'function' && this.ws) {
-          onOpenCallback(this.ws);
+      socket.onopen = () => {
+        if (this.ws !== socket) return;
+        if (typeof onOpenCallback === 'function') {
+          onOpenCallback(socket);
         }
       };
 
-      this.ws.onmessage = (event) => {
+      socket.onmessage = (event) => {
+        if (this.ws !== socket) return;
         this._handleMessage(event.data);
       };
 
-      this.ws.onerror = (err) => {
+      socket.onerror = (err) => {
+        if (this.ws !== socket) return;
         if (!this.isExplicitLeave) {
           this.setState(SIGNALING_STATES.ERROR, {
             message: 'Unable to connect to the PairPort signaling server. Verify backend is running on 127.0.0.1:8000.',
@@ -207,7 +216,8 @@ export class SignalingClient {
         }
       };
 
-      this.ws.onclose = (event) => {
+      socket.onclose = (event) => {
+        if (this.ws !== socket) return;
         if (this.isExplicitLeave) return;
 
         if (this.state === SIGNALING_STATES.WAITING || this.state === SIGNALING_STATES.CONNECTED) {
