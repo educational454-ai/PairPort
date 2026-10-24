@@ -31,6 +31,8 @@ class TestWebSocketSignaling(unittest.TestCase):
             self.assertEqual(payload1["role"], "host")
             self.assertTrue(payload1["session_id"])
             self.assertIn("expires_in", payload1)
+            self.assertIn("invitation_token", payload1)
+            self.assertGreaterEqual(len(payload1["invitation_token"]), 22)
 
             # 2. Server immediately sends waiting status
             msg2 = ws.receive_json()
@@ -44,12 +46,19 @@ class TestWebSocketSignaling(unittest.TestCase):
             host_ws.send_json({"type": "create"})
             created_event = host_ws.receive_json()
             room_code = created_event["payload"]["room_code"]
+            invitation_token = created_event["payload"]["invitation_token"]
             host_session_id = created_event["payload"]["session_id"]
             _ = host_ws.receive_json()  # waiting event
 
-            # Guest joins the room
+            # Guest joins the room with valid invitation token
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
 
                 # Guest receives peer-joined
                 guest_event = guest_ws.receive_json()
@@ -67,15 +76,16 @@ class TestWebSocketSignaling(unittest.TestCase):
                 self.assertEqual(host_event["payload"]["peer_session_id"], guest_session_id)
 
     def test_join_room_via_url_path_new_format(self) -> None:
-        """Verify joining an existing 6-character room code via /ws/{room_code} URL path."""
+        """Verify joining an existing 6-character room code via /ws/{room_code} with invitation token."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
             created_event = host_ws.receive_json()
             room_code = created_event["payload"]["room_code"]
+            invitation_token = created_event["payload"]["invitation_token"]
             host_session_id = created_event["payload"]["session_id"]
             _ = host_ws.receive_json()  # waiting event
 
-            with self.client.websocket_connect(f"/ws/{room_code}") as guest_ws:
+            with self.client.websocket_connect(f"/ws/{room_code}?invitation_token={invitation_token}") as guest_ws:
                 guest_event = guest_ws.receive_json()
                 self.assertEqual(guest_event["type"], "peer-joined")
                 self.assertEqual(guest_event["payload"]["room_code"], room_code)
@@ -107,20 +117,34 @@ class TestWebSocketSignaling(unittest.TestCase):
         """Verify 3rd participant is rejected when room is full."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
-            room_code = host_ws.receive_json()["payload"]["room_code"]
+            created = host_ws.receive_json()
+            room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # peer-joined
                 _ = host_ws.receive_json()   # peer-joined
 
                 # Third connection attempts to join
                 with self.client.websocket_connect("/ws") as third_ws:
-                    third_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                    third_ws.send_json({
+                        "type": "join",
+                        "payload": {
+                            "room_code": room_code,
+                            "invitation_token": invitation_token,
+                        },
+                    })
                     err_msg = third_ws.receive_json()
                     self.assertEqual(err_msg["type"], "error")
-                    self.assertEqual(err_msg["payload"]["code"], "ROOM_FULL")
+                    self.assertIn(err_msg["payload"]["code"], ("ROOM_FULL", "INVITATION_ALREADY_USED"))
 
     def test_invalid_message_handling(self) -> None:
         """Verify malformed JSON or invalid types return structured error messages."""
@@ -149,11 +173,19 @@ class TestWebSocketSignaling(unittest.TestCase):
         guest_client = TestClient(app, headers={"origin": "http://localhost:5173"})
         with host_client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
-            room_code = host_ws.receive_json()["payload"]["room_code"]
+            created = host_ws.receive_json()
+            room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with guest_client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # guest: peer-joined
                 _ = host_ws.receive_json()   # host: peer-joined
                 guest_ws.close()
@@ -172,11 +204,19 @@ class TestWebSocketSignaling(unittest.TestCase):
         """Verify voluntary leave message cleans up and notifies remaining peer."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
-            room_code = host_ws.receive_json()["payload"]["room_code"]
+            created = host_ws.receive_json()
+            room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # guest: peer-joined
                 _ = host_ws.receive_json()   # host: peer-joined
 

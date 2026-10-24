@@ -82,9 +82,13 @@ class TestRoomManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(room.participants), 1)
         self.assertFalse(room.is_full())
 
-        # Second connection becomes guest
+        # Second connection becomes guest with valid invitation token
         dummy_ws_2 = object()
-        room, p2 = await self.manager.join_room(room.code, dummy_ws_2)
+        room, p2 = await self.manager.join_room(
+            room.code,
+            dummy_ws_2,
+            invitation_token=room.invitation_token,
+        )
         self.assertEqual(p2.role, "guest")
         self.assertNotEqual(p1.session_id, p2.session_id)
         self.assertEqual(len(room.participants), 2)
@@ -97,16 +101,16 @@ class TestRoomManager(unittest.IsolatedAsyncioTestCase):
     async def test_join_full_room_rejected(self) -> None:
         room = await self.manager.create_room()
         await self.manager.join_room(room.code, object())
-        await self.manager.join_room(room.code, object())
+        await self.manager.join_room(room.code, object(), invitation_token=room.invitation_token)
 
         # Third attempt rejected
         with self.assertRaises(RoomFullError):
-            await self.manager.join_room(room.code, object())
+            await self.manager.join_room(room.code, object(), invitation_token=room.invitation_token)
 
     async def test_leave_room_and_cleanup(self) -> None:
         room = await self.manager.create_room()
         _, p1 = await self.manager.join_room(room.code, object())
-        _, p2 = await self.manager.join_room(room.code, object())
+        _, p2 = await self.manager.join_room(room.code, object(), invitation_token=room.invitation_token)
 
         # Guest leaves
         updated_room, departed, remaining = await self.manager.leave_room(room.code, p2.session_id)

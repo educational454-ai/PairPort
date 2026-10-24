@@ -27,7 +27,12 @@ from app.config import (
 )
 from app.services.room_manager import (
     DuplicateConnectionError,
+    InvalidInvitationError,
     InvalidRoomCodeError,
+    InvitationAlreadyUsedError,
+    InvitationError,
+    InvitationExpiredError,
+    InvitationRequiredError,
     Participant,
     Room,
     RoomError,
@@ -235,10 +240,16 @@ async def websocket_signaling_endpoint(
     current_session_id: str | None = None
     rate_limiter = ConnectionRateLimiter()
 
-    # If room_code was provided in the URL path, attempt immediate join
+    # If room_code was provided in the URL path, attempt immediate join as guest
     if room_code:
+        invitation_token = websocket.query_params.get("invitation_token")
         try:
-            room, participant = await room_manager.join_room(room_code, websocket)
+            room, participant = await room_manager.join_room(
+                room_code,
+                websocket,
+                invitation_token=invitation_token,
+                role="guest",
+            )
             current_room_code = room.code
             current_session_id = participant.session_id
 
@@ -402,7 +413,7 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
-                room, participant = await room_manager.join_room(room.code, websocket)
+                room, participant = await room_manager.join_room(room.code, websocket, role="host")
                 current_room_code = room.code
                 current_session_id = participant.session_id
 
@@ -411,6 +422,7 @@ async def websocket_signaling_endpoint(
                     "room-created",
                     {
                         "room_code": room.code,
+                        "invitation_token": room.invitation_token,
                         "session_id": current_session_id,
                         "role": participant.role,
                         "expires_in": ROOM_TTL_SECONDS,
@@ -460,8 +472,14 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
+                invitation_token = payload.get("invitation_token")
                 try:
-                    room, participant = await room_manager.join_room(target_code, websocket)
+                    room, participant = await room_manager.join_room(
+                        target_code,
+                        websocket,
+                        invitation_token=invitation_token,
+                        role="guest",
+                    )
                     current_room_code = room.code
                     current_session_id = participant.session_id
 

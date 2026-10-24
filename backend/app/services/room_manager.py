@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import (
+    INVITATION_TOKEN_BYTES,
+    INVITATION_TTL_SECONDS,
     MAX_ACTIVE_ROOMS,
     MAX_PARTICIPANTS_PER_ROOM,
     ROOM_CODE_LENGTH,
@@ -58,6 +60,27 @@ class DuplicateConnectionError(RoomError):
 
 class ServerCapacityError(RoomError):
     code = "SERVER_FULL"
+
+
+class InvitationError(RoomError):
+    """Base exception for invitation validation failures."""
+    code: str = "INVITATION_ERROR"
+
+
+class InvitationRequiredError(InvitationError):
+    code: str = "INVITATION_REQUIRED"
+
+
+class InvalidInvitationError(InvitationError):
+    code: str = "INVALID_INVITATION"
+
+
+class InvitationExpiredError(InvitationError):
+    code: str = "INVITATION_EXPIRED"
+
+
+class InvitationAlreadyUsedError(InvitationError):
+    code: str = "INVITATION_ALREADY_USED"
 
 
 def normalize_room_code(raw_code: str) -> str:
@@ -114,6 +137,10 @@ class Participant:
 class Room:
     """Represents an active in-memory sharing room."""
     code: str
+    invitation_token: str | None = None
+    invitation_consumed: bool = False
+    invitation_created_at: float = field(default_factory=time.time)
+    invitation_ttl: float = INVITATION_TTL_SECONDS
     created_at: float = field(default_factory=time.time)
     last_activity_at: float = field(default_factory=time.time)
     participants: dict[str, Participant] = field(default_factory=dict)
@@ -127,6 +154,26 @@ class Room:
     def is_expired(self, now: float | None = None, ttl: float = ROOM_TTL_SECONDS) -> bool:
         current = now if now is not None else time.time()
         return (current - self.created_at) > ttl
+
+    def is_invitation_valid(self, token: str | None, now: float | None = None) -> tuple[bool, str]:
+        """Validate an invitation token against this room.
+
+        Returns (is_valid, reason_code).
+        """
+        if not token or not isinstance(token, str) or not token.strip():
+            return False, "INVITATION_REQUIRED"
+
+        if self.invitation_consumed:
+            return False, "INVITATION_ALREADY_USED"
+
+        current_time = now if now is not None else time.time()
+        if (current_time - self.invitation_created_at) > self.invitation_ttl:
+            return False, "INVITATION_EXPIRED"
+
+        if not self.invitation_token or not secrets.compare_digest(self.invitation_token, token.strip()):
+            return False, "INVALID_INVITATION"
+
+        return True, "OK"
 
     def get_other_participant(self, session_id: str) -> Participant | None:
         for sid, p in self.participants.items():
@@ -150,7 +197,7 @@ class RoomManager:
         self._lock = asyncio.Lock()
 
     async def create_room(self, ttl: float | None = None) -> Room:
-        """Create a new room with a unique random code."""
+        """Create a new room with a unique random code and guest invitation token."""
         async with self._lock:
             if len(self.rooms) >= MAX_ACTIVE_ROOMS:
                 raise ServerCapacityError(
@@ -171,7 +218,17 @@ class RoomManager:
                         break
 
             now = time.time()
-            room = Room(code=code, created_at=now, last_activity_at=now)
+            effective_invitation_ttl = ttl if ttl is not None else INVITATION_TTL_SECONDS
+            invitation_token = secrets.token_urlsafe(INVITATION_TOKEN_BYTES)
+            room = Room(
+                code=code,
+                invitation_token=invitation_token,
+                invitation_consumed=False,
+                invitation_created_at=now,
+                invitation_ttl=effective_invitation_ttl,
+                created_at=now,
+                last_activity_at=now,
+            )
             self.rooms[code] = room
             return room
 
@@ -190,12 +247,20 @@ class RoomManager:
 
             return room
 
-    async def join_room(self, raw_code: str, websocket: Any) -> tuple[Room, Participant]:
+    async def join_room(
+        self,
+        raw_code: str,
+        websocket: Any,
+        invitation_token: str | None = None,
+        role: str | None = None,
+    ) -> tuple[Room, Participant]:
         """Join an existing room as a participant.
         
         Assigns a server-generated UUID session ID and determines role:
-        - If room has no active host or 0 participants, assigned role is 'host'.
-        - Otherwise, assigned role is 'guest'.
+        - If role is 'host' or room has no active host, assigned role is 'host'.
+        - If role is 'guest' or room already has a host, assigned role is 'guest'.
+          Guest joins strictly require a valid, unconsumed invitation token.
+          Validation and token consumption are performed atomically with slot assignment.
         """
         code = normalize_room_code(raw_code)
         async with self._lock:
@@ -211,16 +276,35 @@ class RoomManager:
             if room.is_full():
                 raise RoomFullError(f"Room '{code}' already has the maximum of {MAX_PARTICIPANTS_PER_ROOM} participants.")
 
-            # Assign identity securely on the server
-            session_id = uuid.uuid4().hex
-
-            # Assign role
             has_host = any(p.role == "host" for p in room.participants.values())
-            role = "host" if not has_host else "guest"
+            if role == "host":
+                if has_host:
+                    raise RoomFullError(f"Room '{code}' already has an active host.")
+                assigned_role = "host"
+            elif role == "guest":
+                assigned_role = "guest"
+            else:
+                assigned_role = "host" if not has_host else "guest"
 
+            if assigned_role == "guest":
+                is_valid, reason = room.is_invitation_valid(invitation_token, now=now)
+                if not is_valid:
+                    if reason == "INVITATION_REQUIRED":
+                        raise InvitationRequiredError("Invitation token is required to join as guest.")
+                    elif reason == "INVITATION_ALREADY_USED":
+                        raise InvitationAlreadyUsedError("Invitation token has already been consumed.")
+                    elif reason == "INVITATION_EXPIRED":
+                        raise InvitationExpiredError("Invitation token has expired.")
+                    else:
+                        raise InvalidInvitationError("Invalid invitation token.")
+
+                # Consume token atomically with slot assignment
+                room.invitation_consumed = True
+
+            session_id = uuid.uuid4().hex
             participant = Participant(
                 session_id=session_id,
-                role=role,
+                role=assigned_role,
                 websocket=websocket,
                 joined_at=now,
             )

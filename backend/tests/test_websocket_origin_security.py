@@ -148,6 +148,7 @@ class TestWebSocketOriginSecurity(unittest.TestCase):
             host_ws.send_json({"type": "create"})
             created = host_ws.receive_json()
             room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             room = room_manager.rooms.get(room_code)
@@ -165,9 +166,9 @@ class TestWebSocketOriginSecurity(unittest.TestCase):
             self.assertEqual(len(room.participants), 1)
             self.assertFalse(room.is_full())
 
-            # Legitimate guest joins with allowed origin
+            # Legitimate guest joins with allowed origin and valid invitation token
             guest_client = TestClient(app, headers={"origin": "http://127.0.0.1:5173"})
-            with guest_client.websocket_connect(f"/ws/{room_code}") as guest_ws:
+            with guest_client.websocket_connect(f"/ws/{room_code}?invitation_token={invitation_token}") as guest_ws:
                 guest_msg = guest_ws.receive_json()
                 self.assertEqual(guest_msg["type"], "peer-joined")
                 self.assertEqual(len(room.participants), 2)

@@ -19,10 +19,17 @@ class TestWebRTCSignalingRelay(unittest.TestCase):
             host_ws.send_json({"type": "create"})
             created = host_ws.receive_json()
             room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # guest: peer-joined
                 _ = host_ws.receive_json()   # host: peer-joined
 
@@ -86,11 +93,19 @@ class TestWebRTCSignalingRelay(unittest.TestCase):
         """Verify ICE candidates are relayed bidirectionally."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
-            room_code = host_ws.receive_json()["payload"]["room_code"]
+            created = host_ws.receive_json()
+            room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # guest: peer-joined
                 _ = host_ws.receive_json()   # host: peer-joined
 
@@ -148,11 +163,19 @@ class TestWebRTCSignalingRelay(unittest.TestCase):
         """Verify malformed SDP payloads are rejected with clear error."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
-            room_code = host_ws.receive_json()["payload"]["room_code"]
+            created = host_ws.receive_json()
+            room_code = created["payload"]["room_code"]
+            invitation_token = created["payload"]["invitation_token"]
             _ = host_ws.receive_json()  # waiting
 
             with self.client.websocket_connect("/ws") as guest_ws:
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                guest_ws.send_json({
+                    "type": "join",
+                    "payload": {
+                        "room_code": room_code,
+                        "invitation_token": invitation_token,
+                    },
+                })
                 _ = guest_ws.receive_json()  # peer-joined
                 _ = host_ws.receive_json()   # peer-joined
 
