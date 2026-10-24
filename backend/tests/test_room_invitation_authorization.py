@@ -70,13 +70,13 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
         guest_ws = object()
 
         # Host joins
-        room, host_p = await self.manager.join_room(room.code, host_ws, role="host")
+        room, host_p, _ = await self.manager.join_room(room.code, host_ws, role="host")
         self.assertEqual(host_p.role, "host")
         self.assertFalse(room.invitation_consumed)
         self.assertEqual(len(room.participants), 1)
 
         # Guest joins with valid token
-        room, guest_p = await self.manager.join_room(
+        room, guest_p, _ = await self.manager.join_room(
             room.code,
             guest_ws,
             invitation_token=room.invitation_token,
@@ -170,7 +170,7 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
         token = room.invitation_token
 
         # Legitimate guest joins
-        room, guest_p = await self.manager.join_room(
+        room, guest_p, _ = await self.manager.join_room(
             room.code,
             object(),
             invitation_token=token,
@@ -206,7 +206,7 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
             try:
                 # Add small non-blocking yield to interleave coroutines
                 await asyncio.sleep(0)
-                _, p = await self.manager.join_room(
+                _, p, _ = await self.manager.join_room(
                     room.code,
                     ws,
                     invitation_token=token,

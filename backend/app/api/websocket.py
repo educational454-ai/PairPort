@@ -20,12 +20,14 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import (
     MAX_MESSAGE_BYTES,
+    RECONNECT_GRACE_PERIOD_SECONDS,
     ROOM_TTL_SECONDS,
     WS_ACTION_LIMIT_ROOM_OPS,
     WS_RATE_LIMIT_BURST,
     WS_RATE_LIMIT_CREATE_PER_MIN,
     WS_RATE_LIMIT_JOIN_PER_MIN,
     WS_RATE_LIMIT_PER_SEC,
+    WS_RATE_LIMIT_RECONNECT_PER_MIN,
     WS_RATE_LIMIT_WINDOW_SECONDS,
     is_origin_allowed,
 )
@@ -33,18 +35,23 @@ from app.services.rate_limiter import get_client_ip, ws_rate_limiter
 from app.services.room_manager import (
     DuplicateConnectionError,
     InvalidInvitationError,
+    InvalidReconnectCredentialError,
     InvalidRoomCodeError,
     InvitationAlreadyUsedError,
     InvitationError,
     InvitationExpiredError,
     InvitationRequiredError,
     Participant,
+    ParticipantNotFoundError,
+    ReconnectError,
+    ReconnectExpiredError,
     Room,
     RoomError,
     RoomExpiredError,
     RoomFullError,
     RoomNotFoundError,
     ServerCapacityError,
+    UnauthorizedRoleError,
     normalize_room_code,
     room_manager,
 )
@@ -165,14 +172,14 @@ def validate_candidate(payload: Any) -> tuple[bool, str, Any]:
 async def handle_leave(
     room_code: str | None,
     session_id: str | None,
-    reason: str = "Peer disconnected.",
+    reason: str = "Peer left the session.",
 ) -> None:
-    """Clean up participant from room and notify remaining peer."""
+    """Clean up participant from room on voluntary leave and notify remaining peer."""
     if not room_code or not session_id:
         return
 
     room, departed, remaining = await room_manager.leave_room(room_code, session_id)
-    if remaining and remaining.websocket:
+    if remaining and remaining.status == "connected" and remaining.websocket:
         await send_json(
             remaining.websocket,
             "peer-left",
@@ -192,6 +199,32 @@ async def handle_leave(
         )
 
 
+async def handle_disconnect(
+    room_code: str | None,
+    session_id: str | None,
+    websocket: WebSocket,
+) -> None:
+    """Handle unexpected WebSocket disconnect by reserving slot for grace period."""
+    if not room_code or not session_id:
+        return
+
+    room, participant, other = await room_manager.disconnect_participant(
+        room_code, session_id, websocket
+    )
+    if other and other.status == "connected" and other.websocket:
+        await send_json(
+            other.websocket,
+            "peer-disconnected",
+            {
+                "room_code": room_code,
+                "peer_session_id": session_id,
+                "role": participant.role if participant else "peer",
+                "grace_period": RECONNECT_GRACE_PERIOD_SECONDS,
+                "message": "Peer disconnected unexpectedly. Slot reserved for reconnection.",
+            },
+        )
+
+
 @router.websocket("/ws")
 @router.websocket("/ws/{room_code}")
 async def websocket_signaling_endpoint(
@@ -206,6 +239,7 @@ async def websocket_signaling_endpoint(
     Supported Inbound Actions:
       - {"type": "create"}
       - {"type": "join", "payload": {"room_code": "..."}}
+      - {"type": "reconnect", "payload": {"room_code": "...", "session_id": "...", "reconnect_token": "..."}}
       - {"type": "leave"}
       - {"type": "ping"}
       - {"type": "signal-offer", "payload": {"sdp": {"type": "offer", "sdp": "..."}}}
@@ -216,6 +250,9 @@ async def websocket_signaling_endpoint(
       - {"type": "room-created", "payload": {...}}
       - {"type": "waiting", "payload": {...}}
       - {"type": "peer-joined", "payload": {...}}
+      - {"type": "peer-disconnected", "payload": {...}}
+      - {"type": "peer-reconnected", "payload": {...}}
+      - {"type": "reconnected", "payload": {...}}
       - {"type": "peer-left", "payload": {...}}
       - {"type": "signal-offer", "payload": {"sender_session_id": "...", "sdp": {...}}}
       - {"type": "signal-answer", "payload": {"sender_session_id": "...", "sdp": {...}}}
@@ -267,7 +304,15 @@ async def websocket_signaling_endpoint(
         # Query parameter invitation tokens are strictly prohibited on /ws/{room_code}
         has_query_token = any(
             k in websocket.query_params
-            for k in ("invitation_token", "token", "invite", "secret", "key")
+            for k in (
+                "invitation_token",
+                "token",
+                "invite",
+                "secret",
+                "key",
+                "reconnect_token",
+                "reconnect",
+            )
         )
         if has_query_token:
             await websocket.accept()
@@ -427,7 +472,7 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
-                room, participant = await room_manager.join_room(room.code, websocket, role="host")
+                room, participant, reconnect_token = await room_manager.join_room(room.code, websocket, role="host")
                 current_room_code = room.code
                 current_session_id = participant.session_id
 
@@ -439,6 +484,7 @@ async def websocket_signaling_endpoint(
                         "invitation_token": room.invitation_token,
                         "session_id": current_session_id,
                         "role": participant.role,
+                        "reconnect_token": reconnect_token,
                         "expires_in": ROOM_TTL_SECONDS,
                     },
                 )
@@ -448,6 +494,9 @@ async def websocket_signaling_endpoint(
                     "waiting",
                     {
                         "room_code": room.code,
+                        "session_id": current_session_id,
+                        "role": participant.role,
+                        "reconnect_token": reconnect_token,
                         "message": "Waiting for peer to join with this room code.",
                     },
                 )
@@ -495,7 +544,7 @@ async def websocket_signaling_endpoint(
 
                 invitation_token = payload.get("invitation_token")
                 try:
-                    room, participant = await room_manager.join_room(
+                    room, participant, reconnect_token = await room_manager.join_room(
                         target_code,
                         websocket,
                         invitation_token=invitation_token,
@@ -505,7 +554,7 @@ async def websocket_signaling_endpoint(
                     current_session_id = participant.session_id
 
                     other = room.get_other_participant(current_session_id)
-                    if other:
+                    if other and other.status == "connected" and other.websocket:
                         # Both participants now present
                         await send_json(
                             websocket,
@@ -515,9 +564,11 @@ async def websocket_signaling_endpoint(
                                 "session_id": current_session_id,
                                 "role": participant.role,
                                 "peer_session_id": other.session_id,
+                                "reconnect_token": reconnect_token,
                                 "message": "Connected to room peer.",
                             },
                         )
+                        # Notify other participant (NEVER leak joining participant's reconnect_token!)
                         await send_json(
                             other.websocket,
                             "peer-joined",
@@ -537,7 +588,122 @@ async def websocket_signaling_endpoint(
                                 "room_code": room.code,
                                 "session_id": current_session_id,
                                 "role": participant.role,
+                                "reconnect_token": reconnect_token,
                                 "message": "Waiting for peer to join with this room code.",
+                            },
+                        )
+                except RoomError as err:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": err.code, "message": str(err)},
+                    )
+
+            # ----------------------------------------------------
+            # 2b. Action: RECONNECT
+            # ----------------------------------------------------
+            elif msg_type == "reconnect":
+                if not rate_limiter.allow_room_action():
+                    await send_json(
+                        websocket,
+                        "error",
+                        {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many room actions. Please slow down.",
+                        },
+                    )
+                    continue
+
+                allowed, retry_after = await ws_rate_limiter.acquire(
+                    f"ws:reconnect:{client_ip}",
+                    WS_RATE_LIMIT_RECONNECT_PER_MIN,
+                    WS_RATE_LIMIT_WINDOW_SECONDS,
+                )
+                if not allowed:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {
+                            "code": "RATE_LIMITED",
+                            "message": f"Too many reconnect attempts. Please wait {retry_after} seconds before retrying.",
+                            "retry_after": retry_after,
+                        },
+                    )
+                    continue
+
+                if current_room_code:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {
+                            "code": "ALREADY_IN_ROOM",
+                            "message": f"Already connected to room {current_room_code}. Leave first.",
+                        },
+                    )
+                    continue
+
+                target_code = payload.get("room_code")
+                session_id = payload.get("session_id")
+                reconnect_token = payload.get("reconnect_token")
+
+                if not target_code:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": "MISSING_ROOM_CODE", "message": "Missing required field 'room_code'."},
+                    )
+                    continue
+
+                if not session_id:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": "MISSING_SESSION_ID", "message": "Missing required field 'session_id'."},
+                    )
+                    continue
+
+                if not reconnect_token:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": "MISSING_RECONNECT_TOKEN", "message": "Missing required field 'reconnect_token'."},
+                    )
+                    continue
+
+                try:
+                    room, participant, new_token, other = await room_manager.reconnect_participant(
+                        target_code,
+                        session_id,
+                        reconnect_token,
+                        websocket,
+                    )
+                    current_room_code = room.code
+                    current_session_id = participant.session_id
+
+                    # Send reconnected event with newly rotated reconnect token to reconnected client
+                    await send_json(
+                        websocket,
+                        "reconnected",
+                        {
+                            "room_code": room.code,
+                            "session_id": participant.session_id,
+                            "role": participant.role,
+                            "reconnect_token": new_token,
+                            "peer_session_id": other.session_id if (other and other.status == "connected") else None,
+                            "message": "Successfully reconnected to room.",
+                        },
+                    )
+
+                    # Notify other participant if actively connected
+                    if other and other.status == "connected" and other.websocket:
+                        await send_json(
+                            other.websocket,
+                            "peer-reconnected",
+                            {
+                                "room_code": room.code,
+                                "peer_session_id": participant.session_id,
+                                "role": participant.role,
+                                "message": "Peer has reconnected.",
                             },
                         )
                 except RoomError as err:
@@ -735,15 +901,15 @@ async def websocket_signaling_endpoint(
                     "error",
                     {
                         "code": "UNKNOWN_ACTION",
-                        "message": f"Unrecognized action '{msg_type}'. Expected 'create', 'join', 'signal-offer', 'signal-answer', 'signal-candidate', 'leave', or 'ping'.",
+                        "message": f"Unrecognized action '{msg_type}'. Expected 'create', 'join', 'reconnect', 'signal-offer', 'signal-answer', 'signal-candidate', 'leave', or 'ping'.",
                     },
                 )
 
     except WebSocketDisconnect:
-        # Client closed connection abruptly
+        # Client closed connection abruptly - reserve slot for reconnect grace period
         if current_room_code and current_session_id:
-            await handle_leave(current_room_code, current_session_id, reason="Peer disconnected.")
+            await handle_disconnect(current_room_code, current_session_id, websocket)
     except Exception as exc:
         logger.exception("Signaling endpoint unexpected error: %s", exc)
         if current_room_code and current_session_id:
-            await handle_leave(current_room_code, current_session_id, reason="Peer connection lost.")
+            await handle_disconnect(current_room_code, current_session_id, websocket)

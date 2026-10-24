@@ -76,21 +76,24 @@ class TestRoomManager(unittest.IsolatedAsyncioTestCase):
 
         # First connection becomes host
         dummy_ws_1 = object()
-        room, p1 = await self.manager.join_room(room.code, dummy_ws_1)
+        room, p1, tok1 = await self.manager.join_room(room.code, dummy_ws_1)
         self.assertEqual(p1.role, "host")
         self.assertTrue(p1.session_id)
+        self.assertTrue(tok1)
         self.assertEqual(len(room.participants), 1)
         self.assertFalse(room.is_full())
 
         # Second connection becomes guest with valid invitation token
         dummy_ws_2 = object()
-        room, p2 = await self.manager.join_room(
+        room, p2, tok2 = await self.manager.join_room(
             room.code,
             dummy_ws_2,
             invitation_token=room.invitation_token,
         )
         self.assertEqual(p2.role, "guest")
         self.assertNotEqual(p1.session_id, p2.session_id)
+        self.assertTrue(tok2)
+        self.assertNotEqual(tok1, tok2)
         self.assertEqual(len(room.participants), 2)
         self.assertTrue(room.is_full())
 
@@ -109,8 +112,8 @@ class TestRoomManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_leave_room_and_cleanup(self) -> None:
         room = await self.manager.create_room()
-        _, p1 = await self.manager.join_room(room.code, object())
-        _, p2 = await self.manager.join_room(room.code, object(), invitation_token=room.invitation_token)
+        _, p1, _ = await self.manager.join_room(room.code, object())
+        _, p2, _ = await self.manager.join_room(room.code, object(), invitation_token=room.invitation_token)
 
         # Guest leaves
         updated_room, departed, remaining = await self.manager.leave_room(room.code, p2.session_id)

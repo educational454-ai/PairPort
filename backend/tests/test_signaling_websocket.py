@@ -206,15 +206,13 @@ class TestWebSocketSignaling(unittest.TestCase):
                 _ = host_ws.receive_json()   # host: peer-joined
                 guest_ws.close()
 
-            # guest_ws closed -> disconnected
-            # Host should receive peer-left event
-            left_event = host_ws.receive_json()
-            self.assertEqual(left_event["type"], "peer-left")
-            self.assertEqual(left_event["payload"]["room_code"], room_code)
-
-            # Host should then receive waiting event
-            waiting_event = host_ws.receive_json()
-            self.assertEqual(waiting_event["type"], "waiting")
+            # guest_ws closed -> abrupt disconnect
+            # Host should receive peer-disconnected event with grace_period reservation
+            disco_event = host_ws.receive_json()
+            self.assertEqual(disco_event["type"], "peer-disconnected")
+            self.assertEqual(disco_event["payload"]["room_code"], room_code)
+            self.assertIn("grace_period", disco_event["payload"])
+            self.assertNotIn("reconnect_token", disco_event["payload"])
 
     def test_voluntary_leave_protocol(self) -> None:
         """Verify voluntary leave message cleans up and notifies remaining peer."""
