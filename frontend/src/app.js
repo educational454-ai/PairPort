@@ -13,12 +13,10 @@ import { APP_CONFIG } from './config/app-config.js';
 import { icons } from './components/icons.js';
 import { showToast } from './components/toast.js';
 import { initModal, showConfirmDialog } from './components/modal.js';
-import { signalingClient, SIGNALING_STATES } from './services/signaling.js';
 import {
   peerConnectionService,
   PEER_CONNECTION_STATES,
   DATA_CHANNEL_STATES,
-  TRANSFER_STATES,
 } from './services/peer-connection.js';
 import {
   formatFileSize,
@@ -27,7 +25,7 @@ import {
   filterClearableFiles,
 } from './utils/ui-helpers.js';
 
-import { state, resetSessionState } from './state/app-state.js';
+import { state } from './state/app-state.js';
 import {
   renderNavbar,
   initNavbar,
@@ -42,6 +40,12 @@ import {
   initPairing,
   setPairingFeedback,
 } from './features/pairing/index.js';
+import {
+  renderLiveSessionPanel,
+  updateSessionStatusUI,
+  computeSessionStatusInfo,
+  initConnectionController,
+} from './features/connection/index.js';
 
 /** Render the complete Phase 4 UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -70,16 +74,19 @@ export function startApp(root = document.querySelector('#app')) {
   // Initialize pairing interactions (create room, join room, validation, copy code)
   initPairing(root);
 
+  // Initialize connection controller (signaling & WebRTC connection lifecycle)
+  initConnectionController(root, {
+    onChatUIUpdate: () => updateChatUI(root),
+    onFilesUIUpdate: () => updateFilesUI(root),
+  });
+
   // Initialize roadmap modal
   initModal();
 
   // Attach all DOM event listeners
   bindEvents(root);
 
-  // Subscribe to real-time WebSocket signaling events
-  bindSignalingEvents(root);
-
-  // Subscribe to real-time WebRTC PeerConnection events
+  // Subscribe to remaining data channel events (chat & file streaming)
   bindWebRTCEvents(root);
 }
 
@@ -87,242 +94,16 @@ export function startApp(root = document.querySelector('#app')) {
 // RENDER HELPERS
 // ==========================================
 
-function renderLiveSessionPanel() {
-  if (state.signalingState === SIGNALING_STATES.IDLE) {
-    return '';
-  }
-
-  const isSignalingConnected = state.signalingState === SIGNALING_STATES.CONNECTED;
-  const isWaiting = state.signalingState === SIGNALING_STATES.WAITING;
-  const isCreating = state.signalingState === SIGNALING_STATES.CREATING;
-  const isJoining = state.signalingState === SIGNALING_STATES.JOINING;
-  const isSignalingError = state.signalingState === SIGNALING_STATES.ERROR;
-
-  const isPeerConnected = state.peerConnectionState === PEER_CONNECTION_STATES.CONNECTED;
-  const isPeerConnecting = state.peerConnectionState === PEER_CONNECTION_STATES.CONNECTING;
-  const isPeerFailed = state.peerConnectionState === PEER_CONNECTION_STATES.FAILED;
-  const isReconnecting = state.isReconnecting;
-  const isDataChannelOpen = state.dataChannelState === DATA_CHANNEL_STATES.OPEN;
-  const isFileChannelOpen = state.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
-  const isRelayActive = state.connectionDiagnostics.isRelay;
-
-  let overallStatusClass = 'waiting';
-  let overallStatusText = 'Connecting...';
-
-  if (isReconnecting) {
-    overallStatusClass = 'reconnecting';
-    overallStatusText = `Reconnecting WebRTC link (Attempt ${state.reconnectAttempt || 1}/3)...`;
-  } else if (isPeerFailed) {
-    overallStatusClass = 'error';
-    overallStatusText = 'WebRTC Connection Failed (Retries exhausted. TURN relay recommended)';
-  } else if (isDataChannelOpen && isFileChannelOpen) {
-    if (isRelayActive) {
-      overallStatusClass = 'relay';
-      overallStatusText = 'Connected via TURN Relay · WebRTC DataChannels Active (P2P Encrypted)';
-    } else {
-      overallStatusClass = 'online';
-      overallStatusText = 'Connected Directly (P2P) · WebRTC DataChannels Active (Zero Server Relay)';
-    }
-  } else if (isDataChannelOpen || isFileChannelOpen) {
-    if (isRelayActive) {
-      overallStatusClass = 'relay';
-      overallStatusText = 'Connected via TURN Relay · WebRTC DataChannel Active';
-    } else {
-      overallStatusClass = 'online';
-      overallStatusText = 'Connected Directly (P2P) · WebRTC DataChannel Active';
-    }
-  } else if (isPeerConnected) {
-    overallStatusClass = isRelayActive ? 'relay' : 'online';
-    overallStatusText = isRelayActive
-      ? 'WebRTC Peer Connected via TURN Relay (Opening DataChannels...)'
-      : 'WebRTC Peer Connected Directly (Opening DataChannels...)';
-  } else if (isPeerConnecting) {
-    overallStatusClass = 'waiting';
-    overallStatusText = 'Negotiating WebRTC ICE Candidates & Handshake...';
-  } else if (isWaiting) {
-    overallStatusClass = 'waiting';
-    overallStatusText = 'Waiting for Peer to Join Room...';
-  } else if (isCreating) {
-    overallStatusClass = 'waiting';
-    overallStatusText = 'Creating room on signaling server...';
-  } else if (isJoining) {
-    overallStatusClass = 'waiting';
-    overallStatusText = 'Joining room on signaling server...';
-  } else if (isSignalingError) {
-    overallStatusClass = 'error';
-    overallStatusText = `Signaling Error: ${escapeHtml(state.signalingError || 'Failed')}`;
-  }
-
-  return `
-    <div class="live-session-panel" role="region" aria-label="Active WebRTC signaling session">
-      <div class="live-session-header">
-        <div class="live-status-group">
-          <span class="status-indicator-dot ${overallStatusClass}"></span>
-          <span class="live-status-text">${overallStatusText}</span>
-        </div>
-        <button type="button" id="leave-room-btn" class="btn btn-danger btn-sm" aria-label="Leave active room">
-          ${icons.x(16)}
-          <span>Leave Room</span>
-        </button>
-      </div>
-
-      ${state.realRoomCode ? `
-        <div class="live-code-row">
-          <div class="live-code-display">
-            <span class="live-code-label">Active Room Code</span>
-            <span class="live-code-val" id="active-live-code">${escapeHtml(state.realRoomCode)}</span>
-          </div>
-          <button type="button" id="copy-live-code-btn" class="btn btn-secondary btn-copy" aria-label="Copy active room code">
-            ${icons.copy(18)}
-            <span class="copy-live-text">Copy code</span>
-          </button>
-        </div>
-      ` : ''}
-
-      <div class="live-session-details">
-        <div class="detail-item">
-          <span class="detail-label">Your Role</span>
-          <span class="detail-val">${state.realRole ? (state.realRole === 'host' ? 'Host (Creator)' : 'Guest (Participant)') : 'Assigning...'}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">Signaling Status</span>
-          <span class="detail-val">${isSignalingConnected ? 'Connected (2 Peers)' : isWaiting ? 'Waiting for Peer (1/2)' : 'Connecting...'}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">WebRTC Peer Connection</span>
-          <span class="detail-val ${isPeerConnected ? 'status-completed' : isPeerFailed ? 'status-failed' : ''}">
-            ${isReconnecting ? `RECONNECTING (${state.reconnectAttempt || 1}/3)` : isPeerConnected ? (isRelayActive ? 'Connected (TURN Relay)' : 'Connected (Direct P2P)') : state.peerConnectionState.toUpperCase()}
-          </span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">DataChannel (Chat)</span>
-          <span class="detail-val ${isDataChannelOpen ? 'status-completed' : ''}">${isDataChannelOpen ? 'OPEN (P2P Live)' : state.dataChannelState.toUpperCase()}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">DataChannel (Files)</span>
-          <span class="detail-val ${isFileChannelOpen ? 'status-completed' : ''}">${isFileChannelOpen ? 'OPEN (P2P Streaming)' : state.fileChannelState.toUpperCase()}</span>
-        </div>
-      </div>
-
-      <!-- Phase 6: Accessible WebRTC Diagnostics & ICE Telemetry Drawer -->
-      <details class="diagnostics-details" id="webrtc-diagnostics-drawer" ${state.isDiagnosticsOpen ? 'open' : ''}>
-        <summary class="diagnostics-summary" aria-label="Toggle WebRTC network diagnostics">
-          <span class="diagnostics-summary-left">
-            ${icons.activity(14)}
-            <span>Connection Diagnostics & ICE Telemetry</span>
-          </span>
-          <span class="diagnostics-mode-badge ${
-            isReconnecting
-              ? 'badge-reconnecting'
-              : state.connectionDiagnostics.isRelay
-              ? 'badge-relay'
-              : isPeerConnected
-              ? 'badge-direct'
-              : 'badge-neutral'
-          }">
-            ${
-              isReconnecting
-                ? `Reconnecting (${state.reconnectAttempt || 1}/3)`
-                : state.connectionDiagnostics.isRelay
-                ? 'TURN Relay'
-                : isPeerConnected
-                ? 'Direct P2P'
-                : 'Configuring'
-            }
-          </span>
-        </summary>
-        <div class="diagnostics-grid">
-          <div class="diag-card">
-            <span class="diag-label">Connection Mode</span>
-            <span class="diag-value ${state.connectionDiagnostics.isRelay ? 'val-relay' : isPeerConnected ? 'val-direct' : ''}">
-              ${
-                state.connectionDiagnostics.isRelay
-                  ? 'Relayed (TURN Transport)'
-                  : isPeerConnected
-                  ? 'Direct P2P (Peer-to-Peer)'
-                  : isReconnecting
-                  ? 'Reconnecting'
-                  : 'Negotiating'
-              }
-            </span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">ICE Connection State</span>
-            <span class="diag-value">${(state.connectionDiagnostics.iceConnectionState || 'idle').toUpperCase()}</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">ICE Gathering State</span>
-            <span class="diag-value">${(state.connectionDiagnostics.iceGatheringState || 'idle').toUpperCase()}</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">Selected Candidate Type</span>
-            <span class="diag-value">${
-              state.connectionDiagnostics.selectedCandidateType === 'relay'
-                ? 'Relay (TURN)'
-                : state.connectionDiagnostics.selectedCandidateType === 'srflx'
-                ? 'Reflexive (STUN NAT)'
-                : state.connectionDiagnostics.selectedCandidateType === 'host'
-                ? 'Host (Local LAN)'
-                : state.connectionDiagnostics.selectedCandidateType || 'Discovering'
-            }</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">Reconnection Retries</span>
-            <span class="diag-value">${state.connectionDiagnostics.reconnectAttempts || 0} / ${state.connectionDiagnostics.maxReconnectAttempts || 3}</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">Round-Trip Latency (RTT)</span>
-            <span class="diag-value">${typeof state.connectionDiagnostics.roundTripTimeMs === 'number' ? `${state.connectionDiagnostics.roundTripTimeMs} ms` : 'N/A'}</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">TURN Relay Configured</span>
-            <span class="diag-value">${APP_CONFIG.iceConfig?.isTurnConfigured ? 'Yes (Credentials Loaded)' : 'No (STUN-only Mode)'}</span>
-          </div>
-          <div class="diag-card">
-            <span class="diag-label">Privacy Shield</span>
-            <span class="diag-value val-shielded">IP Addresses & Ports Masked</span>
-          </div>
-        </div>
-      </details>
-    </div>
-  `;
-}
-
 function renderWorkspaceSection() {
-  const isDataChannelOpen = state.dataChannelState === DATA_CHANNEL_STATES.OPEN;
-  const isFileChannelOpen = state.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
-  const isSessionActive = state.signalingState !== SIGNALING_STATES.IDLE;
-  const isReconnecting = state.isReconnecting;
-  const isPeerFailed = state.peerConnectionState === PEER_CONNECTION_STATES.FAILED;
-  const isRelayActive = state.connectionDiagnostics.isRelay;
-
-  let statusDotClass = 'waiting';
-  let statusPillHtml = `Status: <strong>Idle</strong> (Pair above to connect)`;
-  let metaBadgeText = 'P2P Ready';
-
-  if (isReconnecting) {
-    statusDotClass = 'reconnecting';
-    statusPillHtml = `Reconnecting: <strong>Attempt ${state.reconnectAttempt || 1}/3</strong> (Recovering link...)`;
-    metaBadgeText = 'Reconnecting WebRTC...';
-  } else if (isPeerFailed) {
-    statusDotClass = 'error';
-    statusPillHtml = `Connection: <strong>Failed</strong> (Retries exhausted)`;
-    metaBadgeText = 'Connection Failed';
-  } else if (isDataChannelOpen || isFileChannelOpen) {
-    if (isRelayActive) {
-      statusDotClass = 'relay';
-      statusPillHtml = `TURN Relay: <strong>Peer Connected</strong> (Encrypted Transport)`;
-      metaBadgeText = 'TURN Relay Active';
-    } else {
-      statusDotClass = 'online';
-      statusPillHtml = `P2P Direct: <strong>Peer Connected</strong> (WebRTC DataChannels)`;
-      metaBadgeText = 'Direct P2P (0 Server Relay)';
-    }
-  } else if (isSessionActive) {
-    statusDotClass = 'waiting';
-    statusPillHtml = `Signaling: <strong>${state.signalingState.toUpperCase()}</strong>`;
-    metaBadgeText = 'Negotiating WebRTC...';
-  }
+  const {
+    statusDotClass,
+    statusPillHtml,
+    metaBadgeText,
+    isDataChannelOpen,
+    isFileChannelOpen,
+    isReconnecting,
+    isRelayActive,
+  } = computeSessionStatusInfo(state);
 
   return `
     <section id="workspace" class="workspace-section" aria-labelledby="workspace-heading">
@@ -726,190 +507,10 @@ function renderChatMessages() {
 
 
 // ==========================================
-// REAL-TIME SIGNALING & WEBRTC WIRING
+// DATA CHANNEL STREAMING WIRING
 // ==========================================
 
-function bindSignalingEvents(root) {
-  const updateSessionUI = () => {
-    const container = root.querySelector('#live-session-container');
-    if (container) {
-      container.innerHTML = renderLiveSessionPanel();
-      bindLivePanelEvents(root);
-    }
-
-    updatePairingCardsUI(root);
-
-    const workspaceCode = root.querySelector('#workspace-room-code');
-    if (workspaceCode) {
-      workspaceCode.textContent = state.realRoomCode || 'Not Connected';
-    }
-  };
-
-  signalingClient.on('stateChange', (newState, detail) => {
-    state.signalingState = newState;
-    state.realRoomCode = detail.roomCode || state.realRoomCode;
-    state.realSessionId = detail.sessionId || state.realSessionId;
-    state.realRole = detail.role || state.realRole;
-    state.peerSessionId = detail.peerSessionId;
-
-    if (newState === SIGNALING_STATES.ERROR) {
-      state.signalingError = detail.message || 'Signaling error occurred.';
-    } else {
-      state.signalingError = null;
-    }
-
-    updateSessionUI();
-  });
-
-  signalingClient.on('roomCreated', (payload) => {
-    state.realRoomCode = payload.room_code;
-    state.realSessionId = payload.session_id;
-    state.realRole = payload.role;
-    showToast(`Real room "${payload.room_code}" created on server!`, 'success');
-  });
-
-  signalingClient.on('waiting', () => {
-    showToast(`Waiting for peer to join room ${state.realRoomCode || ''}`, 'info', 3000);
-  });
-
-  signalingClient.on('peerJoined', async (payload) => {
-    state.realRoomCode = payload.room_code;
-    state.peerSessionId = payload.peer_session_id;
-    showToast(`Peer connected to signaling room ${payload.room_code}. Initializing WebRTC...`, 'info', 3000);
-
-    // Both peers present: initiate WebRTC peer connection
-    try {
-      await peerConnectionService.startPeerConnection(state.realRole);
-    } catch (err) {
-      console.error('WebRTC start error:', err);
-      showToast('Failed to start WebRTC peer connection.', 'warning');
-    }
-  });
-
-  signalingClient.on('peerLeft', () => {
-    state.peerSessionId = null;
-    peerConnectionService.close();
-
-    state.realFiles = [];
-    state.activeTransfer = null;
-    state.fileChannelState = DATA_CHANNEL_STATES.IDLE;
-
-    state.realChatMessages.push({
-      id: `sys-${Date.now()}`,
-      sender: 'system',
-      text: 'Peer left the session. WebRTC DataChannels closed. Waiting for a new peer...',
-      timestamp: formatTime(new Date()),
-      isReal: true,
-    });
-
-    updateChatUI(root);
-    updateFilesUI(root);
-    showToast('Peer left the room.', 'warning', 4000);
-  });
-
-  signalingClient.on('error', (payload) => {
-    setPairingFeedback(root, payload.message || 'Failed to connect to room.', 'error');
-    showToast(`Error: ${payload.message || 'Operation failed.'}`, 'warning', 4000);
-  });
-}
-
 function bindWebRTCEvents(root) {
-  peerConnectionService.on('connectionStateChange', (newState) => {
-    state.peerConnectionState = newState;
-    state.connectionDiagnostics.connectionState = newState;
-
-    if (newState === 'connected') {
-      state.isReconnecting = false;
-      state.reconnectAttempt = 0;
-      peerConnectionService.emitDiagnosticsUpdate();
-      showToast('WebRTC peer connection established directly!', 'success', 3000);
-    } else if (newState === 'failed') {
-      state.isReconnecting = false;
-      showToast('WebRTC connection failed. A TURN relay server may be required on restricted networks.', 'warning', 5000);
-    }
-    updateSessionUI(root);
-    updateChatUI(root);
-    updateFilesUI(root);
-  });
-
-  peerConnectionService.on('iceConnectionStateChange', (iceState) => {
-    state.connectionDiagnostics.iceConnectionState = iceState;
-    if (iceState === 'connected' || iceState === 'completed') {
-      state.isReconnecting = false;
-      state.reconnectAttempt = 0;
-      peerConnectionService.emitDiagnosticsUpdate();
-    }
-    updateSessionUI(root);
-  });
-
-  peerConnectionService.on('iceGatheringStateChange', (gatheringState) => {
-    state.connectionDiagnostics.iceGatheringState = gatheringState;
-    updateSessionUI(root);
-  });
-
-  peerConnectionService.on('reconnecting', (info) => {
-    state.isReconnecting = true;
-    state.reconnectAttempt = info.attempt;
-    state.connectionDiagnostics.reconnectAttempts = info.attempt;
-    updateSessionUI(root);
-    updateChatUI(root);
-    updateFilesUI(root);
-    showToast(`Reconnecting WebRTC link (attempt ${info.attempt}/${info.maxAttempts})... In-flight transfers paused.`, 'warning', 3500);
-  });
-
-  peerConnectionService.on('terminalFailure', (info) => {
-    state.isReconnecting = false;
-    state.peerConnectionState = PEER_CONNECTION_STATES.FAILED;
-    state.dataChannelState = DATA_CHANNEL_STATES.CLOSED;
-    state.fileChannelState = DATA_CHANNEL_STATES.CLOSED;
-    updateSessionUI(root);
-    updateChatUI(root);
-    updateFilesUI(root);
-    showToast('WebRTC connection failed: Reconnection attempts exhausted. Check firewall or configure TURN relay.', 'error', 6000);
-  });
-
-  peerConnectionService.on('diagnosticsUpdate', (diag) => {
-    state.connectionDiagnostics = { ...state.connectionDiagnostics, ...diag };
-    updateSessionUI(root);
-  });
-
-  peerConnectionService.on('dataChannelStateChange', (newState) => {
-    state.dataChannelState = newState;
-    updateChatUI(root);
-    updateSessionUI(root);
-
-    if (newState === 'open') {
-      state.realChatMessages.push({
-        id: `sys-open-${Date.now()}`,
-        sender: 'system',
-        text: 'Direct WebRTC DataChannel open! Messages stream peer-to-peer.',
-        timestamp: formatTime(new Date()),
-        isReal: true,
-      });
-      updateChatUI(root);
-      showToast('WebRTC DataChannel is open! Real-time chat is ready.', 'success', 4000);
-    }
-  });
-
-  peerConnectionService.on('fileChannelStateChange', (newState) => {
-    state.fileChannelState = newState;
-    updateFilesUI(root);
-    updateSessionUI(root);
-  });
-
-  peerConnectionService.on('fileChannelOpen', () => {
-    state.fileChannelState = DATA_CHANNEL_STATES.OPEN;
-    updateFilesUI(root);
-    updateSessionUI(root);
-    showToast('WebRTC file streaming data channel ready!', 'success', 3000);
-  });
-
-  peerConnectionService.on('fileChannelClose', () => {
-    state.fileChannelState = DATA_CHANNEL_STATES.CLOSED;
-    updateFilesUI(root);
-    updateSessionUI(root);
-  });
-
   peerConnectionService.on('chatMessage', (msg) => {
     state.realChatMessages.push(msg);
     updateChatUI(root);
@@ -985,71 +586,9 @@ function bindWebRTCEvents(root) {
     updateFilesUI(root);
     showToast(`Transfer cancelled for "${transfer.name}"`, 'warning', 3000);
   });
-
-  peerConnectionService.on('error', (err) => {
-    console.warn('WebRTC error event:', err);
-    if (err.message) {
-      showToast(`WebRTC notice: ${err.message}`, 'warning', 4000);
-    }
-  });
 }
 
-function updateSessionUI(root) {
-  const container = root.querySelector('#live-session-container');
-  if (container) {
-    container.innerHTML = renderLiveSessionPanel();
-    bindLivePanelEvents(root);
-  }
 
-  // Synchronize workspace topbar peer status pill & latency badge
-  const statusPill = root.querySelector('.workspace-topbar .peer-status-pill');
-  if (statusPill) {
-    const isDataChannelOpen = state.dataChannelState === DATA_CHANNEL_STATES.OPEN;
-    const isFileChannelOpen = state.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
-    const isSessionActive = state.signalingState !== SIGNALING_STATES.IDLE;
-    const isReconnecting = state.isReconnecting;
-    const isPeerFailed = state.peerConnectionState === PEER_CONNECTION_STATES.FAILED;
-    const isRelayActive = state.connectionDiagnostics.isRelay;
-
-    let statusDotClass = 'waiting';
-    let statusPillHtml = `Status: <strong>Idle</strong> (Pair above to connect)`;
-    let metaBadgeText = 'P2P Ready';
-
-    if (isReconnecting) {
-      statusDotClass = 'reconnecting';
-      statusPillHtml = `Reconnecting: <strong>Attempt ${state.reconnectAttempt || 1}/3</strong> (Recovering link...)`;
-      metaBadgeText = 'Reconnecting WebRTC...';
-    } else if (isPeerFailed) {
-      statusDotClass = 'error';
-      statusPillHtml = `Connection: <strong>Failed</strong> (Retries exhausted)`;
-      metaBadgeText = 'Connection Failed';
-    } else if (isDataChannelOpen || isFileChannelOpen) {
-      if (isRelayActive) {
-        statusDotClass = 'relay';
-        statusPillHtml = `TURN Relay: <strong>Peer Connected</strong> (Encrypted Transport)`;
-        metaBadgeText = 'TURN Relay Active';
-      } else {
-        statusDotClass = 'online';
-        statusPillHtml = `P2P Direct: <strong>Peer Connected</strong> (WebRTC DataChannels)`;
-        metaBadgeText = 'Direct P2P (0 Server Relay)';
-      }
-    } else if (isSessionActive) {
-      statusDotClass = 'waiting';
-      statusPillHtml = `Signaling: <strong>${state.signalingState.toUpperCase()}</strong>`;
-      metaBadgeText = 'Negotiating WebRTC...';
-    }
-
-    statusPill.innerHTML = `
-      <span class="status-indicator-dot ${statusDotClass}"></span>
-      <span class="peer-label">${statusPillHtml}</span>
-    `;
-
-    const latencyBadgeText = root.querySelector('.workspace-topbar .latency-badge span');
-    if (latencyBadgeText) {
-      latencyBadgeText.textContent = metaBadgeText;
-    }
-  }
-}
 
 function updateFilesUI(root) {
   const isFileChannelOpen = state.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
@@ -1147,71 +686,7 @@ function updateChatUI(root) {
   }
 }
 
-function bindLivePanelEvents(root) {
-  // Bind diagnostics drawer toggle to remember open/closed state across updates
-  const drawer = root.querySelector('#webrtc-diagnostics-drawer');
-  if (drawer) {
-    drawer.addEventListener('toggle', () => {
-      state.isDiagnosticsOpen = drawer.open;
-    });
-  }
 
-  const leaveBtn = root.querySelector('#leave-room-btn');
-  if (leaveBtn) {
-    leaveBtn.addEventListener('click', () => {
-      showConfirmDialog({
-        title: 'Leave Current Room?',
-        message: `Disconnect from room "${state.realRoomCode || ''}"? WebRTC data channels will close and your direct peer connection will end.`,
-        confirmText: 'Leave Room',
-        cancelText: 'Stay in Room',
-        isDestructive: true,
-        onConfirm: () => {
-          // Revoke Blob URLs
-          state.realFiles.forEach((f) => {
-            if (f.blobUrl) {
-              try { URL.revokeObjectURL(f.blobUrl); } catch {}
-              f.blobUrl = null;
-            }
-          });
-
-          peerConnectionService.close();
-          signalingClient.leaveRoom();
-
-          resetSessionState(state);
-
-          updateSessionUI(root);
-          updateChatUI(root);
-          updateFilesUI(root);
-          showToast('Left room session. Returned to pairing view.', 'info', 3000);
-        },
-      });
-    });
-  }
-
-  const copyLiveBtn = root.querySelector('#copy-live-code-btn');
-  if (copyLiveBtn && state.realRoomCode) {
-    copyLiveBtn.addEventListener('click', async () => {
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          await navigator.clipboard.writeText(state.realRoomCode);
-        }
-        showToast(`Copied room code "${state.realRoomCode}"!`, 'success', 3000);
-        const textSpan = copyLiveBtn.querySelector('.copy-live-text');
-        if (textSpan) {
-          const orig = textSpan.textContent;
-          textSpan.textContent = 'Copied! ✓';
-          copyLiveBtn.classList.add('copied');
-          setTimeout(() => {
-            textSpan.textContent = orig;
-            copyLiveBtn.classList.remove('copied');
-          }, 2000);
-        }
-      } catch {
-        showToast(`Room code: ${state.realRoomCode}`, 'info', 3000);
-      }
-    });
-  }
-}
 
 // ==========================================
 // DOM EVENT HANDLING & ACCESSIBILITY
