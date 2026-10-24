@@ -115,6 +115,64 @@ describe('2. renderLiveSessionPanel', () => {
     assert.ok(html.includes('badge-reconnecting'));
     assert.ok(html.includes('Reconnecting (1/3)'));
   });
+
+  it('renders reconnecting status and notes active P2P channels when signaling is reconnecting but DataChannels open', () => {
+    const s = createInitialState();
+    s.signalingState = SIGNALING_STATES.CONNECTED;
+    s.realRoomCode = 'PORT-1234';
+    s.isSignalingReconnecting = true;
+    s.signalingReconnectAttempt = 2;
+    s.dataChannelState = DATA_CHANNEL_STATES.OPEN;
+    s.fileChannelState = DATA_CHANNEL_STATES.OPEN;
+
+    const html = renderLiveSessionPanel(s);
+    assert.ok(html.includes('status-indicator-dot reconnecting'));
+    assert.ok(html.includes('Signaling Reconnecting (2/5) · Direct P2P channels still active'));
+    assert.ok(!html.includes('Connected Directly (P2P) · WebRTC DataChannels Active (Zero Server Relay)'));
+  });
+
+  it('renders peer disconnected grace status and notes active P2P channels when peer disconnected from signaling but DataChannels open', () => {
+    const s = createInitialState();
+    s.signalingState = SIGNALING_STATES.CONNECTED;
+    s.realRoomCode = 'PORT-1234';
+    s.isPeerDisconnected = true;
+    s.peerDisconnectDeadline = Date.now() + 20000;
+    s.dataChannelState = DATA_CHANNEL_STATES.OPEN;
+    s.fileChannelState = DATA_CHANNEL_STATES.OPEN;
+
+    const html = renderLiveSessionPanel(s);
+    assert.ok(html.includes('status-indicator-dot reconnecting'));
+    assert.ok(html.includes('Peer disconnected from signaling'));
+    assert.ok(html.includes('Direct P2P channels still active'));
+  });
+
+  it('renders signaling connected but DataChannels closed when signaling restored but channels not open', () => {
+    const s = createInitialState();
+    s.signalingState = SIGNALING_STATES.CONNECTED;
+    s.realRoomCode = 'PORT-1234';
+    s.isSignalingReconnecting = false;
+    s.isPeerDisconnected = false;
+    s.dataChannelState = DATA_CHANNEL_STATES.CLOSED;
+    s.fileChannelState = DATA_CHANNEL_STATES.CLOSED;
+
+    const html = renderLiveSessionPanel(s);
+    assert.ok(html.includes('Signaling Connected · WebRTC DataChannels closed'));
+    assert.ok(!html.includes('Connected Directly (P2P)'));
+  });
+
+  it('renders online connected status when fully healthy signaling and both DataChannels open', () => {
+    const s = createInitialState();
+    s.signalingState = SIGNALING_STATES.CONNECTED;
+    s.realRoomCode = 'PORT-1234';
+    s.isSignalingReconnecting = false;
+    s.isPeerDisconnected = false;
+    s.dataChannelState = DATA_CHANNEL_STATES.OPEN;
+    s.fileChannelState = DATA_CHANNEL_STATES.OPEN;
+
+    const html = renderLiveSessionPanel(s);
+    assert.ok(html.includes('status-indicator-dot online'));
+    assert.ok(html.includes('Connected Directly (P2P) · WebRTC DataChannels Active (Zero Server Relay)'));
+  });
 });
 
 describe('3. updateSessionStatusUI', () => {

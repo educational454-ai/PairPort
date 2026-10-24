@@ -138,6 +138,25 @@ export function sanitizeFilename(rawName) {
   return cleaned.slice(0, 255);
 }
 
+/**
+ * Extract origin session ID from SDP string (RFC 4566/8866 'o=' line).
+ * Format: o=<username> <sess-id> <sess-version> <nettype> <addrtype> <unicast-address>
+ */
+export function extractSdpSessionId(sdpStr) {
+  if (!sdpStr || typeof sdpStr !== 'string') return null;
+  const match = sdpStr.match(/^o=\S+\s+(\d+)/m);
+  return match ? match[1] : null;
+}
+
+/**
+ * Extract origin session version from SDP string.
+ */
+export function extractSdpSessionVersion(sdpStr) {
+  if (!sdpStr || typeof sdpStr !== 'string') return null;
+  const match = sdpStr.match(/^o=\S+\s+\d+\s+(\d+)/m);
+  return match ? parseInt(match[1], 10) : null;
+}
+
 export class PeerConnectionService {
   constructor(iceServers = APP_CONFIG.iceServers || DEFAULT_ICE_SERVERS) {
     this.iceServers = iceServers;
@@ -158,12 +177,16 @@ export class PeerConnectionService {
     this.listeners = new Map();
     this.isTearingDown = false;
 
-    // Network resilience and bounded ICE recovery (Phase 6)
+    // Network resilience, generational guards, and bounded ICE recovery (Phase 6 & 9J-3)
     this.iceRestartAttempts = 0;
     this.maxIceRestartAttempts = 3;
     this.isRestartingIce = false;
     this.iceDisconnectTimer = null;
     this.isProcessingDescription = false;
+    this._connectionGeneration = 0;
+    this.lastRemoteSdpSessionId = null;
+    this.lastRemoteSdpSessionVersion = null;
+    this.maxPendingCandidates = 64;
 
     // File transfer configurations from APP_CONFIG
     this.maxFileSizeBytes = APP_CONFIG.fileTransfer?.maxFileSizeBytes || 100 * 1024 * 1024;
@@ -262,6 +285,8 @@ export class PeerConnectionService {
     this.pendingCandidates = [];
     this.iceRestartAttempts = 0;
     this.isRestartingIce = false;
+    this._connectionGeneration = (this._connectionGeneration || 0) + 1;
+    const currentGeneration = this._connectionGeneration;
 
     this._setConnectionState(PEER_CONNECTION_STATES.CONNECTING);
 
@@ -273,6 +298,7 @@ export class PeerConnectionService {
 
       // 1. ICE Candidate generation handler
       this.pc.onicecandidate = (event) => {
+        if (this._connectionGeneration !== currentGeneration || !this.pc) return;
         if (event.candidate) {
           signalingClient.sendCandidate(event.candidate.toJSON());
         } else {
@@ -283,7 +309,7 @@ export class PeerConnectionService {
 
       // 2. Peer Connection state monitoring
       this.pc.onconnectionstatechange = () => {
-        if (!this.pc || this.isTearingDown) return;
+        if (this._connectionGeneration !== currentGeneration || !this.pc || this.isTearingDown) return;
         const state = this.pc.connectionState;
         this._setConnectionState(state);
 
@@ -313,7 +339,7 @@ export class PeerConnectionService {
 
       // 3. ICE Connection State monitoring
       this.pc.oniceconnectionstatechange = () => {
-        if (!this.pc || this.isTearingDown) return;
+        if (this._connectionGeneration !== currentGeneration || !this.pc || this.isTearingDown) return;
         const iceState = this.pc.iceConnectionState;
         this.emit('iceStateChange', iceState);
         this.emit('iceConnectionStateChange', iceState);
@@ -339,7 +365,7 @@ export class PeerConnectionService {
 
       // 4. ICE Gathering State monitoring
       this.pc.onicegatheringstatechange = () => {
-        if (!this.pc || this.isTearingDown) return;
+        if (this._connectionGeneration !== currentGeneration || !this.pc || this.isTearingDown) return;
         const gatheringState = this.pc.iceGatheringState;
         this.emit('iceGatheringStateChange', gatheringState);
       };
@@ -351,13 +377,13 @@ export class PeerConnectionService {
           ordered: true,
         });
         this.dataChannel = this.chatChannel; // backwards-compatible alias
-        this._bindChatChannelEvents(this.chatChannel);
+        this._bindChatChannelEvents(this.chatChannel, currentGeneration);
 
         // File Channel
         this.fileChannel = this.pc.createDataChannel('pairport-files', {
           ordered: true,
         });
-        this._bindFileChannelEvents(this.fileChannel);
+        this._bindFileChannelEvents(this.fileChannel, currentGeneration);
 
         // Host creates and sends offer
         const offer = await this.pc.createOffer();
@@ -366,19 +392,21 @@ export class PeerConnectionService {
       } else {
         // Guest handles incoming data channels
         this.pc.ondatachannel = (event) => {
+          if (this._connectionGeneration !== currentGeneration || !this.pc || this.isTearingDown) return;
           const channel = event.channel;
           if (channel.label === 'pairport-files') {
             this.fileChannel = channel;
-            this._bindFileChannelEvents(this.fileChannel);
+            this._bindFileChannelEvents(this.fileChannel, currentGeneration);
           } else {
             // Default to chat channel ('pairport-chat')
             this.chatChannel = channel;
             this.dataChannel = this.chatChannel;
-            this._bindChatChannelEvents(this.chatChannel);
+            this._bindChatChannelEvents(this.chatChannel, currentGeneration);
           }
         };
       }
     } catch (err) {
+      if (this._connectionGeneration !== currentGeneration) return;
       this._setConnectionState(PEER_CONNECTION_STATES.FAILED);
       this.emit('error', { code: 'PEER_INIT_FAILED', message: String(err) });
       throw err;
@@ -412,14 +440,45 @@ export class PeerConnectionService {
   }
 
   /**
+   * Check whether an ICE restart is viable.
+   * Under RFC 8831 / WebRTC 1.0, an ICE restart cannot reopen closed RTCDataChannels.
+   */
+  canAttemptIceRestart() {
+    if (this.isTearingDown || !this.pc) return false;
+    if (
+      this.pc.signalingState === 'closed' ||
+      this.pc.connectionState === 'closed' ||
+      this.pc.connectionState === 'failed'
+    ) {
+      return false;
+    }
+    if (this.chatChannel && this.chatChannel.readyState === 'closed') {
+      return false;
+    }
+    if (this.fileChannel && this.fileChannel.readyState === 'closed') {
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Attempt bounded ICE restart with idempotent protection and retry limits.
    * If retry limit is reached, transitions to terminal failure and cancels in-flight transfers.
+   *
+   * @param {string} [reason='network disruption'] - Disruption trigger reason
+   * @returns {Promise<boolean>} True if ICE restart was initiated, false if ineligible or failed
    */
   async attemptIceRestart(reason = 'network disruption') {
-    if (this.isTearingDown || !this.pc) return;
+    if (this.isTearingDown || !this.pc) return false;
 
     // Idempotent guard: do not start concurrent competing restarts
-    if (this.isRestartingIce) return;
+    if (this.isRestartingIce) return false;
+
+    // WebRTC RFC 8831 invariant: Closed DataChannels cannot be reopened by ICE restart
+    if (!this.canAttemptIceRestart()) {
+      console.warn(`[PairPort] Cannot perform ICE restart (${reason}): connection or channels closed.`);
+      return false;
+    }
 
     // Terminal failure check: abort when retries are exhausted
     if (this.iceRestartAttempts >= this.maxIceRestartAttempts) {
@@ -438,7 +497,7 @@ export class PeerConnectionService {
         code: 'ICE_RESTART_EXHAUSTED',
         message: 'WebRTC connection failed. A TURN relay server may be required on restricted networks.',
       });
-      return;
+      return false;
     }
 
     this.iceRestartAttempts++;
@@ -458,13 +517,16 @@ export class PeerConnectionService {
         const offer = await this.pc.createOffer({ iceRestart: true });
         await this.pc.setLocalDescription(offer);
         signalingClient.sendOffer(this.pc.localDescription);
+        return true;
       } catch (err) {
         console.error('[PairPort] Error generating ICE restart offer:', err);
         this.isRestartingIce = false;
+        return false;
       }
     } else {
       // Guest peer emits reconnecting status and awaits host restart offer
       console.log(`[PairPort Guest] ICE restart triggered (attempt ${this.iceRestartAttempts}/${this.maxIceRestartAttempts}). Waiting for host offer.`);
+      return true;
     }
   }
 
@@ -475,8 +537,33 @@ export class PeerConnectionService {
     const { sdp } = payload;
     if (!sdp || sdp.type !== 'offer') return;
 
-    if (!this.pc) {
-      // If guest has not initialized PC yet, initialize now
+    const offerSdpStr = sdp.sdp || '';
+    const incomingSessId = extractSdpSessionId(offerSdpStr);
+    const incomingSessVersion = extractSdpSessionVersion(offerSdpStr);
+
+    // Guard against duplicate or delayed offers for an already processed version of the same session
+    if (
+      incomingSessId &&
+      this.lastRemoteSdpSessionId === incomingSessId &&
+      incomingSessVersion !== null &&
+      this.lastRemoteSdpSessionVersion !== null &&
+      incomingSessVersion <= this.lastRemoteSdpSessionVersion
+    ) {
+      console.warn(`[PairPort] Ignoring duplicate or delayed offer (sess-id: ${incomingSessId}, v: ${incomingSessVersion} <= ${this.lastRemoteSdpSessionVersion})`);
+      return;
+    }
+
+    // Determine whether guest must re-initialize a fresh RTCPeerConnection:
+    // 1. If PC does not exist
+    // 2. If existing PC is closed or failed
+    // 3. If existing DataChannels have closed (cannot be reopened via renegotiation)
+    // 4. If offer has a new SDP session ID (host started a fresh peer connection instance)
+    const isNewSession = Boolean(incomingSessId && this.lastRemoteSdpSessionId && incomingSessId !== this.lastRemoteSdpSessionId);
+    const isPcDead = !this.pc || this.pc.signalingState === 'closed' || this.pc.connectionState === 'closed' || this.pc.connectionState === 'failed';
+    const areChannelsDead = Boolean(this.chatChannel && this.chatChannel.readyState === 'closed');
+
+    if (!this.pc || isPcDead || areChannelsDead || isNewSession) {
+      console.log(`[PairPort Guest] Re-initializing fresh peer connection for incoming offer (newSession: ${isNewSession}, deadPC: ${isPcDead}, deadChannels: ${areChannelsDead})`);
       await this.startPeerConnection('guest');
     }
 
@@ -490,7 +577,14 @@ export class PeerConnectionService {
 
     this.isProcessingDescription = true;
     try {
-      await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const desc = typeof RTCSessionDescription === 'function' ? new RTCSessionDescription(sdp) : sdp;
+      await this.pc.setRemoteDescription(desc);
+      if (incomingSessId) {
+        this.lastRemoteSdpSessionId = incomingSessId;
+      }
+      if (incomingSessVersion !== null) {
+        this.lastRemoteSdpSessionVersion = incomingSessVersion;
+      }
       await this._drainPendingCandidates();
 
       // Generate and send answer
@@ -519,7 +613,8 @@ export class PeerConnectionService {
 
     this.isProcessingDescription = true;
     try {
-      await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const desc = typeof RTCSessionDescription === 'function' ? new RTCSessionDescription(sdp) : sdp;
+      await this.pc.setRemoteDescription(desc);
       await this._drainPendingCandidates();
       this.isRestartingIce = false;
     } catch (err) {
@@ -543,6 +638,10 @@ export class PeerConnectionService {
       this.pc.signalingState === 'closed'
     ) {
       if (candidateData) {
+        if (this.pendingCandidates.length >= this.maxPendingCandidates) {
+          console.warn('[PairPort] Pending candidate queue full (max 64), discarding candidate.');
+          return;
+        }
         this.pendingCandidates.push(candidateData);
       }
       return;
@@ -559,7 +658,8 @@ export class PeerConnectionService {
     }
 
     try {
-      await this.pc.addIceCandidate(new RTCIceCandidate(candidateData));
+      const cand = typeof RTCIceCandidate === 'function' ? new RTCIceCandidate(candidateData) : candidateData;
+      await this.pc.addIceCandidate(cand);
     } catch (err) {
       console.warn('[PairPort] Failed to apply ICE candidate:', err);
     }
@@ -575,7 +675,8 @@ export class PeerConnectionService {
     for (const cand of candidatesToProcess) {
       if (cand) {
         try {
-          await this.pc.addIceCandidate(new RTCIceCandidate(cand));
+          const candidateObj = typeof RTCIceCandidate === 'function' ? new RTCIceCandidate(cand) : cand;
+          await this.pc.addIceCandidate(candidateObj);
         } catch (err) {
           console.warn('[PairPort] Failed to add queued ICE candidate:', err);
         }
@@ -678,25 +779,29 @@ export class PeerConnectionService {
   // CHAT DATACHANNEL METHODS
   // ==========================================
 
-  _bindChatChannelEvents(channel) {
+  _bindChatChannelEvents(channel, generation = this._connectionGeneration) {
     this._setDataChannelState(DATA_CHANNEL_STATES.CONNECTING);
 
     channel.onopen = () => {
+      if (this._connectionGeneration !== generation) return;
       this._setDataChannelState(DATA_CHANNEL_STATES.OPEN);
       this.emit('dataChannelOpen');
     };
 
     channel.onclose = () => {
+      if (this._connectionGeneration !== generation) return;
       this._setDataChannelState(DATA_CHANNEL_STATES.CLOSED);
       this.emit('dataChannelClose');
     };
 
     channel.onerror = (err) => {
+      if (this._connectionGeneration !== generation) return;
       console.warn('WebRTC Chat DataChannel error:', err);
       this.emit('error', { code: 'DATA_CHANNEL_ERROR', message: 'Chat DataChannel error occurred.' });
     };
 
     channel.onmessage = (event) => {
+      if (this._connectionGeneration !== generation) return;
       this._handleChatChannelMessage(event.data);
     };
   }
@@ -768,29 +873,33 @@ export class PeerConnectionService {
   // FILE DATACHANNEL METHODS (PHASE 5)
   // ==========================================
 
-  _bindFileChannelEvents(channel) {
+  _bindFileChannelEvents(channel, generation = this._connectionGeneration) {
     channel.binaryType = 'arraybuffer';
     // Backpressure threshold configuration
     channel.bufferedAmountLowThreshold = this.bufferedAmountLowThreshold;
     this._setFileChannelState(DATA_CHANNEL_STATES.CONNECTING);
 
     channel.onopen = () => {
+      if (this._connectionGeneration !== generation) return;
       this._setFileChannelState(DATA_CHANNEL_STATES.OPEN);
       this.emit('fileChannelOpen');
     };
 
     channel.onclose = () => {
+      if (this._connectionGeneration !== generation) return;
       this._setFileChannelState(DATA_CHANNEL_STATES.CLOSED);
       this.emit('fileChannelClose');
       this._failInFlightTransfers('Connection closed while file transfer was in progress.');
     };
 
     channel.onerror = (err) => {
+      if (this._connectionGeneration !== generation) return;
       console.warn('WebRTC File DataChannel error:', err);
       this.emit('error', { code: 'FILE_CHANNEL_ERROR', message: 'File DataChannel error occurred.' });
     };
 
     channel.onmessage = (event) => {
+      if (this._connectionGeneration !== generation) return;
       this._handleFileChannelMessage(event.data);
     };
   }
@@ -1253,6 +1362,9 @@ export class PeerConnectionService {
   /** Close the WebRTC PeerConnection and DataChannels cleanly */
   close() {
     this.isTearingDown = true;
+    this._connectionGeneration = (this._connectionGeneration || 0) + 1;
+    this.lastRemoteSdpSessionId = null;
+    this.lastRemoteSdpSessionVersion = null;
 
     // Clear any pending ICE disconnection timers
     if (this.iceDisconnectTimer) {

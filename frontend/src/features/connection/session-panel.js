@@ -41,12 +41,14 @@ export function computeSessionStatusInfo(currentState = state) {
 
   if (isSignalingReconnecting) {
     statusDotClass = 'reconnecting';
-    statusPillHtml = `Signaling: <strong>Reconnecting (${currentState.signalingReconnectAttempt || 1}/5)</strong>`;
-    metaBadgeText = 'Reconnecting Signaling...';
+    const p2pSuffix = isDataChannelOpen && isFileChannelOpen ? ' (P2P Active)' : '';
+    statusPillHtml = `Signaling: <strong>Reconnecting (${currentState.signalingReconnectAttempt || 1}/5)</strong>${p2pSuffix}`;
+    metaBadgeText = isDataChannelOpen && isFileChannelOpen ? 'Signaling Reconnecting · P2P Active' : 'Reconnecting Signaling...';
   } else if (isPeerDisconnected) {
     statusDotClass = 'reconnecting';
-    statusPillHtml = `Peer Disconnected: <strong>Waiting (${remainingPeerSec}s grace)</strong>`;
-    metaBadgeText = `Peer Disconnected (${remainingPeerSec}s)`;
+    const p2pSuffix = isDataChannelOpen && isFileChannelOpen ? ' (P2P Active)' : '';
+    statusPillHtml = `Peer Disconnected: <strong>Waiting (${remainingPeerSec}s grace)</strong>${p2pSuffix}`;
+    metaBadgeText = isDataChannelOpen && isFileChannelOpen ? `Peer Disconnected (${remainingPeerSec}s) · P2P Active` : `Peer Disconnected (${remainingPeerSec}s)`;
   } else if (isReconnecting) {
     statusDotClass = 'reconnecting';
     statusPillHtml = `Reconnecting: <strong>Attempt ${currentState.reconnectAttempt || 1}/3</strong> (Recovering link...)`;
@@ -123,10 +125,18 @@ export function renderLiveSessionPanel(currentState = state) {
 
   if (isSignalingReconnecting) {
     overallStatusClass = 'reconnecting';
-    overallStatusText = `Reconnecting to signaling server (Attempt ${currentState.signalingReconnectAttempt || 1}/5)...`;
+    if (isDataChannelOpen && isFileChannelOpen) {
+      overallStatusText = `Signaling Reconnecting (${currentState.signalingReconnectAttempt || 1}/5) · Direct P2P channels still active`;
+    } else {
+      overallStatusText = `Reconnecting to signaling server (Attempt ${currentState.signalingReconnectAttempt || 1}/5)...`;
+    }
   } else if (isPeerDisconnected) {
     overallStatusClass = 'reconnecting';
-    overallStatusText = `Peer disconnected temporarily. Waiting for peer to reconnect (${remainingPeerSec}s remaining)...`;
+    if (isDataChannelOpen && isFileChannelOpen) {
+      overallStatusText = `Peer disconnected from signaling (${remainingPeerSec}s grace remaining) · Direct P2P channels still active`;
+    } else {
+      overallStatusText = `Peer disconnected temporarily. Waiting for peer to reconnect (${remainingPeerSec}s remaining)...`;
+    }
   } else if (isReconnecting) {
     overallStatusClass = 'reconnecting';
     overallStatusText = `Reconnecting WebRTC link (Attempt ${currentState.reconnectAttempt || 1}/3)...`;
@@ -157,6 +167,9 @@ export function renderLiveSessionPanel(currentState = state) {
   } else if (isPeerConnecting) {
     overallStatusClass = 'waiting';
     overallStatusText = 'Negotiating WebRTC ICE Candidates & Handshake...';
+  } else if (isSignalingConnected && !isDataChannelOpen && !isFileChannelOpen) {
+    overallStatusClass = 'waiting';
+    overallStatusText = 'Signaling Connected · WebRTC DataChannels closed';
   } else if (isWaiting) {
     overallStatusClass = 'waiting';
     overallStatusText = 'Waiting for Peer to Join Room...';

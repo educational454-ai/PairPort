@@ -133,6 +133,7 @@ export function initConnectionController(root = document, {
   }
 
   let peerDisconnectTimer = null;
+  let isRecoveringWebRTC = false;
 
   function refreshSessionUI() {
     updateSessionStatusUI(root, state);
@@ -146,7 +147,88 @@ export function initConnectionController(root = document, {
     }
   }
 
+  function handleRecoveryFailure(reason) {
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+      peerDisconnectTimer = null;
+    }
+    isRecoveringWebRTC = false;
+    state.isSignalingReconnecting = false;
+    state.signalingReconnectAttempt = 0;
+    state.reconnectToken = null;
+    state.isPeerDisconnected = false;
+    state.peerDisconnectGracePeriod = null;
+    state.peerDisconnectDeadline = null;
+    state.isReconnecting = false;
+    state.reconnectAttempt = 0;
+
+    // Clear obsolete WebRTC peer connection and active transfers
+    peerConnection.close();
+
+    // Mark peer connection state as failed in app state
+    state.peerConnectionState = PEER_CONNECTION_STATES.FAILED;
+    state.dataChannelState = DATA_CHANNEL_STATES.CLOSED;
+    state.fileChannelState = DATA_CHANNEL_STATES.CLOSED;
+
+    // Post system message in chat
+    state.realChatMessages.push({
+      id: `sys-failure-${Date.now()}`,
+      sender: 'system',
+      text: `Connection lost: ${reason} Please return to pairing to start a new session.`,
+      timestamp: formatTime(new Date()),
+      isReal: true,
+    });
+
+    refreshSessionUI();
+    if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
+    if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
+    toast(`Connection lost: ${reason}`, 'error', 6000);
+  }
+
+  async function recoverWebRTCTransport(triggerSource) {
+    if (isRecoveringWebRTC) {
+      console.log(`[PairPort Recovery] Recovery already in progress, skipping trigger: ${triggerSource}`);
+      return;
+    }
+
+    const isChatReady = typeof peerConnection.isChatReady === 'function' ? peerConnection.isChatReady() : false;
+    const isFileReady = typeof peerConnection.isFileChannelReady === 'function' ? peerConnection.isFileChannelReady() : true;
+
+    // If both DataChannels are already open and healthy, preserve them
+    if (isChatReady && isFileReady) {
+      console.log(`[PairPort Recovery] WebRTC channels healthy, preserving connection (${triggerSource})`);
+      return;
+    }
+
+    isRecoveringWebRTC = true;
+    try {
+      const canRestart = typeof peerConnection.canAttemptIceRestart === 'function'
+        ? peerConnection.canAttemptIceRestart()
+        : Boolean(peerConnection.pc && peerConnection.pc.connectionState !== 'closed' && peerConnection.pc.connectionState !== 'failed');
+
+      if (canRestart) {
+        console.log(`[PairPort Recovery] Attempting ICE restart (${triggerSource})`);
+        const restarted = await peerConnection.attemptIceRestart(triggerSource);
+        if (!restarted && state.realRole === 'host' && typeof peerConnection.startPeerConnection === 'function') {
+          console.log(`[PairPort Recovery] ICE restart returned false. Host initiating fresh negotiation (${triggerSource})`);
+          await peerConnection.startPeerConnection('host');
+        }
+      } else if (state.realRole === 'host' && typeof peerConnection.startPeerConnection === 'function') {
+        console.log(`[PairPort Recovery] Channels or connection unrecoverable via ICE restart. Host initiating fresh negotiation (${triggerSource})`);
+        await peerConnection.startPeerConnection('host');
+      } else {
+        console.log(`[PairPort Recovery] Guest awaiting host fresh offer (${triggerSource})`);
+      }
+    } catch (err) {
+      console.error(`[PairPort Recovery] Error during recovery (${triggerSource}):`, err);
+    } finally {
+      isRecoveringWebRTC = false;
+    }
+  }
+
   function handleLeave() {
+    isRecoveringWebRTC = false;
+
     // Revoke any in-memory blob URLs
     state.realFiles.forEach((f) => {
       if (f.blobUrl) {
@@ -241,17 +323,9 @@ export function initConnectionController(root = document, {
     state.reconnectToken = payload.reconnect_token;
     state.peerSessionId = payload.peer_session_id || null;
 
-    // Attempt WebRTC recovery if peer is present and data channel is not open
-    if (payload.peer_session_id && !peerConnection.isChatReady()) {
-      if (peerConnection.pc && peerConnection.pc.connectionState !== 'closed') {
-        peerConnection.attemptIceRestart('Signaling reconnected');
-      } else if (state.realRole === 'host') {
-        try {
-          await peerConnection.startPeerConnection('host');
-        } catch (err) {
-          console.error('WebRTC restart error on reconnected:', err);
-        }
-      }
+    // Attempt WebRTC recovery if peer is present and data channels are not open
+    if (payload.peer_session_id && (!peerConnection.isChatReady() || !peerConnection.isFileChannelReady())) {
+      await recoverWebRTCTransport('Signaling reconnected');
     }
 
     refreshSessionUI();
@@ -274,6 +348,7 @@ export function initConnectionController(root = document, {
       if (remaining <= 0) {
         clearInterval(peerDisconnectTimer);
         peerDisconnectTimer = null;
+        handleRecoveryFailure('Peer reconnect grace period expired.');
       }
       refreshSessionUI();
     }, 1000);
@@ -310,16 +385,8 @@ export function initConnectionController(root = document, {
       isReal: true,
     });
 
-    if (!peerConnection.isChatReady()) {
-      if (peerConnection.pc && peerConnection.pc.connectionState !== 'closed') {
-        peerConnection.attemptIceRestart('Peer reconnected');
-      } else if (state.realRole === 'host') {
-        try {
-          await peerConnection.startPeerConnection('host');
-        } catch (err) {
-          console.error('WebRTC restart error on peerReconnected:', err);
-        }
-      }
+    if (!peerConnection.isChatReady() || !peerConnection.isFileChannelReady()) {
+      await recoverWebRTCTransport('Peer reconnected');
     }
 
     refreshSessionUI();
@@ -329,18 +396,7 @@ export function initConnectionController(root = document, {
   });
 
   signaling.on('reconnectFailed', (payload) => {
-    state.isSignalingReconnecting = false;
-    state.signalingReconnectAttempt = 0;
-    state.reconnectToken = null;
-    if (peerDisconnectTimer) {
-      clearInterval(peerDisconnectTimer);
-      peerDisconnectTimer = null;
-    }
-    state.isPeerDisconnected = false;
-    state.peerDisconnectGracePeriod = null;
-    state.peerDisconnectDeadline = null;
-    refreshSessionUI();
-    toast(`Reconnection failed: ${payload.message || 'Attempts exhausted.'}`, 'error', 5000);
+    handleRecoveryFailure(payload?.message || 'Signaling reconnection attempts exhausted.');
   });
 
   signaling.on('peerLeft', () => {
@@ -482,15 +538,8 @@ export function initConnectionController(root = document, {
     toast(`Reconnecting WebRTC link (attempt ${info.attempt}/${info.maxAttempts})... In-flight transfers paused.`, 'warning', 3500);
   });
 
-  peerConnection.on('terminalFailure', () => {
-    state.isReconnecting = false;
-    state.peerConnectionState = PEER_CONNECTION_STATES.FAILED;
-    state.dataChannelState = DATA_CHANNEL_STATES.CLOSED;
-    state.fileChannelState = DATA_CHANNEL_STATES.CLOSED;
-    refreshSessionUI();
-    if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
-    if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
-    toast('WebRTC connection failed: Reconnection attempts exhausted. Check firewall or configure TURN relay.', 'error', 6000);
+  peerConnection.on('terminalFailure', (payload) => {
+    handleRecoveryFailure(payload?.message || 'WebRTC reconnection attempts exhausted.');
   });
 
   peerConnection.on('diagnosticsUpdate', (diag) => {
