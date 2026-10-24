@@ -12,6 +12,7 @@ export const SIGNALING_STATES = Object.freeze({
   JOINING: 'joining',
   WAITING: 'waiting',
   CONNECTED: 'connected',
+  RECONNECTING: 'reconnecting',
   DISCONNECTED: 'disconnected',
   ERROR: 'error',
 });
@@ -26,11 +27,21 @@ export class SignalingClient {
     this.role = null;
     this.invitationToken = null;
     this.invitationRoomCode = null;
+    this.reconnectToken = null; // In-memory only; never persisted in localStorage or logs
     this.peerSessionId = null;
     this.listeners = new Map();
     this.isExplicitLeave = false;
     this._joinAttemptGeneration = 0;
     this._pendingJoin = null;
+
+    // Bounded reconnect properties (Step 9J)
+    this.reconnectAttempt = 0;
+    this.maxReconnectAttempts = 5;
+    this.reconnectGracePeriod = 30.0;
+    this.reconnectDeadline = null;
+    this.reconnectTimer = null;
+    this._reconnectAttemptGeneration = 0;
+    this._socketGeneration = 0;
 
     // Clean up socket on window beforeunload
     if (typeof window !== 'undefined') {
@@ -40,7 +51,7 @@ export class SignalingClient {
     }
   }
 
-  /** Subscribe to events ('stateChange', 'roomCreated', 'waiting', 'peerJoined', 'peerLeft', 'signalOffer', 'signalAnswer', 'signalCandidate', 'error') */
+  /** Subscribe to events ('stateChange', 'roomCreated', 'waiting', 'peerJoined', 'peerLeft', 'reconnected', 'peerDisconnected', 'peerReconnected', 'reconnectFailed', 'reconnecting', 'signalOffer', 'signalAnswer', 'signalCandidate', 'error') */
   on(event, callback) {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());
@@ -101,6 +112,8 @@ export class SignalingClient {
 
     this.leaveRoom();
     this.isExplicitLeave = false;
+    this._cancelReconnect();
+    this.reconnectToken = null;
     this.setState(SIGNALING_STATES.CREATING);
 
     this._connect((ws) => {
@@ -135,6 +148,8 @@ export class SignalingClient {
     const token = invitationToken.trim();
     this.leaveRoom();
     this.isExplicitLeave = false;
+    this._cancelReconnect();
+    this.reconnectToken = null;
     this.invitationToken = token;
     this.invitationRoomCode = code;
 
@@ -151,6 +166,131 @@ export class SignalingClient {
     this._connect((ws) => {
       this._send(ws, 'join', { room_code: code, invitation_token: token });
     });
+  }
+
+  /**
+   * Reconnect to existing room session using in-memory credentials.
+   *
+   * @param {string} [rawCode=this.roomCode]
+   * @param {string} [sessionId=this.sessionId]
+   * @param {string} [reconnectToken=this.reconnectToken]
+   */
+  reconnect(rawCode = this.roomCode, sessionId = this.sessionId, reconnectToken = this.reconnectToken) {
+    if (this.isExplicitLeave) return;
+
+    const code = this.normalizeCode(rawCode);
+    if (!code || !sessionId || !reconnectToken) {
+      this._cancelReconnect();
+      this.setState(SIGNALING_STATES.DISCONNECTED, {
+        message: 'Missing credentials to reconnect.',
+      });
+      this.emit('reconnectFailed', {
+        code: 'MISSING_RECONNECT_CREDENTIALS',
+        message: 'Cannot reconnect without room code, session ID, and reconnect token.',
+      });
+      return;
+    }
+
+    // Check if grace period deadline has passed
+    if ((this.reconnectDeadline && Date.now() > this.reconnectDeadline) || (this.reconnectAttempt >= this.maxReconnectAttempts)) {
+      this._cancelReconnect();
+      this.reconnectToken = null;
+      this.setState(SIGNALING_STATES.DISCONNECTED, {
+        message: 'Reconnect window expired.',
+      });
+      this.emit('reconnectFailed', {
+        code: 'RECONNECT_EXPIRED',
+        message: 'Reconnect window expired.',
+      });
+      return;
+    }
+
+    this.roomCode = code;
+    this.sessionId = sessionId;
+    this.reconnectToken = reconnectToken;
+    this.reconnectAttempt++;
+    this._reconnectAttemptGeneration = (this._reconnectAttemptGeneration || 0) + 1;
+    const currentGen = this._reconnectAttemptGeneration;
+
+    this.setState(SIGNALING_STATES.RECONNECTING, {
+      attempt: this.reconnectAttempt,
+      maxAttempts: this.maxReconnectAttempts,
+      roomCode: code,
+    });
+    this.emit('reconnecting', {
+      attempt: this.reconnectAttempt,
+      maxAttempts: this.maxReconnectAttempts,
+      roomCode: code,
+    });
+
+    // Safely close previous socket without triggering leaveRoom
+    if (this.ws) {
+      const oldWs = this.ws;
+      this.ws = null;
+      try {
+        oldWs.onopen = null;
+        oldWs.onmessage = null;
+        oldWs.onerror = null;
+        oldWs.onclose = null;
+        oldWs.close();
+      } catch {}
+    }
+
+    this._connect((ws) => {
+      if (this._reconnectAttemptGeneration !== currentGen) return;
+      this._send(ws, 'reconnect', {
+        room_code: code,
+        session_id: sessionId,
+        reconnect_token: reconnectToken,
+      });
+    });
+  }
+
+  /** Schedule next reconnect attempt with exponential backoff bounded by grace period */
+  _scheduleReconnect() {
+    if (this.isExplicitLeave) return;
+    if (!this.roomCode || !this.sessionId || !this.reconnectToken) return;
+
+    // Avoid duplicate or overlapping timers
+    if (this.reconnectTimer) return;
+
+    if (!this.reconnectDeadline) {
+      this.reconnectDeadline = Date.now() + (this.reconnectGracePeriod * 1000);
+    }
+
+    if (Date.now() >= this.reconnectDeadline || this.reconnectAttempt >= this.maxReconnectAttempts) {
+      this._cancelReconnect();
+      this.reconnectToken = null;
+      this.setState(SIGNALING_STATES.DISCONNECTED, {
+        reason: 'Reconnect attempts exhausted or deadline passed',
+      });
+      this.emit('reconnectFailed', {
+        code: 'RECONNECT_EXHAUSTED',
+        message: 'Reconnection attempts exhausted.',
+      });
+      return;
+    }
+
+    // Exponential backoff: 500ms, 1000ms, 2000ms, 4000ms, max 5000ms
+    let delay = Math.min(500 * Math.pow(2, this.reconnectAttempt), 5000);
+    if (Date.now() + delay > this.reconnectDeadline) {
+      delay = Math.max(0, this.reconnectDeadline - Date.now());
+    }
+
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.reconnect();
+    }, delay);
+  }
+
+  /** Cancel active reconnect timer and reset retry counters */
+  _cancelReconnect() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnectAttempt = 0;
+    this.reconnectDeadline = null;
   }
 
   /** Send WebRTC SDP Offer to peer via signaling server */
@@ -185,6 +325,7 @@ export class SignalingClient {
   /** Voluntarily leave the room and reset state */
   leaveRoom() {
     this.isExplicitLeave = true;
+    this._cancelReconnect();
 
     if (this.ws) {
       const closingWs = this.ws;
@@ -208,6 +349,7 @@ export class SignalingClient {
     this.role = null;
     this.invitationToken = null;
     this.invitationRoomCode = null;
+    this.reconnectToken = null;
     this.peerSessionId = null;
     this._pendingJoin = null;
 
@@ -220,45 +362,53 @@ export class SignalingClient {
     try {
       const socket = new WebSocket(this.endpoint);
       this.ws = socket;
+      const socketGen = ++this._socketGeneration;
 
       socket.onopen = () => {
-        if (this.ws !== socket) return;
+        if (this.ws !== socket || this._socketGeneration !== socketGen) return;
         if (typeof onOpenCallback === 'function') {
           onOpenCallback(socket);
         }
       };
 
       socket.onmessage = (event) => {
-        if (this.ws !== socket) return;
+        if (this.ws !== socket || this._socketGeneration !== socketGen) return;
         this._handleMessage(event.data);
       };
 
       socket.onerror = (err) => {
-        if (this.ws !== socket) return;
+        if (this.ws !== socket || this._socketGeneration !== socketGen) return;
         if (!this.isExplicitLeave) {
-          this.setState(SIGNALING_STATES.ERROR, {
-            message: 'Unable to connect to the PairPort signaling server. Verify backend is running on 127.0.0.1:8000.',
-            rawError: err,
-          });
-          this.emit('error', {
-            code: 'CONNECTION_FAILED',
-            message: 'Unable to connect to the signaling server.',
-          });
+          if (this.state !== SIGNALING_STATES.RECONNECTING) {
+            this.setState(SIGNALING_STATES.ERROR, {
+              message: 'Unable to connect to the PairPort signaling server. Verify backend is running on 127.0.0.1:8000.',
+              rawError: err,
+            });
+            this.emit('error', {
+              code: 'CONNECTION_FAILED',
+              message: 'Unable to connect to the signaling server.',
+            });
+          }
         }
       };
 
       socket.onclose = (event) => {
-        if (this.ws !== socket) return;
+        if (this.ws !== socket || this._socketGeneration !== socketGen) return;
+        this.ws = null;
+
         if (this.isExplicitLeave) return;
 
-        if (this.state === SIGNALING_STATES.WAITING || this.state === SIGNALING_STATES.CONNECTED) {
+        // Bounded automatic reconnection if credentials exist
+        const canReconnect = Boolean(this.roomCode && this.sessionId && this.reconnectToken);
+        if (canReconnect && this.state !== SIGNALING_STATES.ERROR) {
+          this._scheduleReconnect();
+        } else if (this.state === SIGNALING_STATES.WAITING || this.state === SIGNALING_STATES.CONNECTED) {
           this.setState(SIGNALING_STATES.DISCONNECTED, {
             reason: event.reason || 'WebSocket disconnected',
           });
         } else if (this.state !== SIGNALING_STATES.ERROR && this.state !== SIGNALING_STATES.IDLE) {
           this.setState(SIGNALING_STATES.DISCONNECTED);
         }
-        this.ws = null;
       };
     } catch (err) {
       this.setState(SIGNALING_STATES.ERROR, {
@@ -294,6 +444,8 @@ export class SignalingClient {
         this.role = payload.role;
         this.invitationToken = payload.invitation_token || null;
         this.invitationRoomCode = payload.room_code || null;
+        this.reconnectToken = payload.reconnect_token || null;
+        this._cancelReconnect();
         this.emit('roomCreated', payload);
         break;
       }
@@ -302,7 +454,9 @@ export class SignalingClient {
         this.roomCode = payload.room_code || this.roomCode;
         if (payload.session_id) this.sessionId = payload.session_id;
         if (payload.role) this.role = payload.role;
+        if (payload.reconnect_token) this.reconnectToken = payload.reconnect_token;
         this.peerSessionId = null;
+        this._cancelReconnect();
         this.setState(SIGNALING_STATES.WAITING, payload);
         this.emit('waiting', payload);
         break;
@@ -312,9 +466,38 @@ export class SignalingClient {
         this.roomCode = payload.room_code || this.roomCode;
         if (payload.session_id) this.sessionId = payload.session_id;
         if (payload.role) this.role = payload.role;
+        if (payload.reconnect_token) this.reconnectToken = payload.reconnect_token;
         this.peerSessionId = payload.peer_session_id;
+        this._cancelReconnect();
         this.setState(SIGNALING_STATES.CONNECTED, payload);
         this.emit('peerJoined', payload);
+        break;
+      }
+
+      case 'reconnected': {
+        this.roomCode = payload.room_code || this.roomCode;
+        this.sessionId = payload.session_id || this.sessionId;
+        this.role = payload.role || this.role;
+        this.reconnectToken = payload.reconnect_token; // Credential rotation!
+        this.peerSessionId = payload.peer_session_id || null;
+        this._cancelReconnect();
+        this.setState(this.peerSessionId ? SIGNALING_STATES.CONNECTED : SIGNALING_STATES.WAITING, payload);
+        this.emit('reconnected', payload);
+        break;
+      }
+
+      case 'peer-disconnected': {
+        if (payload.grace_period) {
+          this.reconnectGracePeriod = Number(payload.grace_period);
+        }
+        this.emit('peerDisconnected', payload);
+        break;
+      }
+
+      case 'peer-reconnected': {
+        this.peerSessionId = payload.peer_session_id;
+        this.setState(SIGNALING_STATES.CONNECTED, payload);
+        this.emit('peerReconnected', payload);
         break;
       }
 
@@ -346,6 +529,18 @@ export class SignalingClient {
       }
 
       case 'error': {
+        const terminalReconnectErrors = [
+          'RECONNECT_EXPIRED',
+          'INVALID_RECONNECT_TOKEN',
+          'PARTICIPANT_NOT_FOUND',
+          'ROOM_NOT_FOUND',
+          'ROOM_EXPIRED',
+        ];
+        if (terminalReconnectErrors.includes(payload.code)) {
+          this._cancelReconnect();
+          this.reconnectToken = null;
+          this.emit('reconnectFailed', payload);
+        }
         this.setState(SIGNALING_STATES.ERROR, payload);
         this.emit('error', payload);
         break;

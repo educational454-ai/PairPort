@@ -177,7 +177,7 @@ export function initFiles(root = document, {
   const handleSelectedFiles = async (fileList) => {
     if (!fileList || fileList.length === 0) return;
 
-    if (!peerConnection.isFileChannelReady()) {
+    if (!peerConnection.isFileChannelReady() || state.isPeerDisconnected || state.isSignalingReconnecting) {
       toast('Pair with a peer above to activate direct file streaming.', 'warning', 4000);
       return;
     }
@@ -213,7 +213,7 @@ export function initFiles(root = document, {
   if (browseBtn && fileBrowseInput) {
     browseBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      if (!peerConnection.isFileChannelReady()) {
+      if (!peerConnection.isFileChannelReady() || state.isPeerDisconnected || state.isSignalingReconnecting) {
         toast('Pair with a peer above to activate direct file streaming.', 'warning', 3500);
         return;
       }

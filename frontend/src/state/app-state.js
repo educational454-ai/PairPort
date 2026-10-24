@@ -39,13 +39,14 @@ export function createDefaultDiagnostics() {
  */
 export function createInitialState() {
   return {
-    // Real signaling state (Phase 3 & 9F)
+    // Real signaling state (Phase 3 & 9F & 9J)
     signalingState: SIGNALING_STATES.IDLE,
     realRoomCode: null,
     realSessionId: null,
     realRole: null,
     invitationToken: null, // In-memory only; never persisted in localStorage or logs
     invitationRoomCode: null, // Normalized room code bound to invitationToken
+    reconnectToken: null, // In-memory only; never persisted in localStorage, cookies, or logs
     peerSessionId: null,
     signalingError: null,
 
@@ -57,9 +58,14 @@ export function createInitialState() {
     realFiles: [],        // In-memory real file transfers
     activeTransfer: null, // Currently streaming file transfer
 
-    // Network Resilience & Diagnostics (Phase 6)
+    // Network Resilience & Diagnostics (Phase 6 & 9J)
     isReconnecting: false,
     reconnectAttempt: 0,
+    isSignalingReconnecting: false,
+    signalingReconnectAttempt: 0,
+    isPeerDisconnected: false,
+    peerDisconnectGracePeriod: null,
+    peerDisconnectDeadline: null,
     isDiagnosticsOpen: false,
     connectionDiagnostics: createDefaultDiagnostics(),
 
@@ -91,6 +97,7 @@ export function resetSessionState(target = state) {
   target.realRole = null;
   target.invitationToken = null;
   target.invitationRoomCode = null;
+  target.reconnectToken = null;
   target.peerSessionId = null;
   target.signalingError = null;
 
@@ -100,6 +107,11 @@ export function resetSessionState(target = state) {
 
   target.isReconnecting = false;
   target.reconnectAttempt = 0;
+  target.isSignalingReconnecting = false;
+  target.signalingReconnectAttempt = 0;
+  target.isPeerDisconnected = false;
+  target.peerDisconnectGracePeriod = null;
+  target.peerDisconnectDeadline = null;
   target.isDiagnosticsOpen = false;
   target.connectionDiagnostics = createDefaultDiagnostics();
 

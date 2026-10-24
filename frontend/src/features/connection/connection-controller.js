@@ -132,6 +132,8 @@ export function initConnectionController(root = document, {
     root._connectionControllerInitialized = true;
   }
 
+  let peerDisconnectTimer = null;
+
   function refreshSessionUI() {
     updateSessionStatusUI(root, state);
     bindSessionPanelEvents(root, {
@@ -155,6 +157,11 @@ export function initConnectionController(root = document, {
 
     peerConnection.close();
     signaling.leaveRoom();
+
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+      peerDisconnectTimer = null;
+    }
 
     resetSessionState(state);
 
@@ -187,6 +194,7 @@ export function initConnectionController(root = document, {
     state.realRoomCode = payload.room_code;
     state.realSessionId = payload.session_id;
     state.realRole = payload.role;
+    state.reconnectToken = payload.reconnect_token || null;
     state.invitationToken = payload.invitation_token || null;
     state.invitationRoomCode = payload.room_code || null;
     toast(`Real room "${payload.room_code}" created on server!`, 'success');
@@ -201,6 +209,9 @@ export function initConnectionController(root = document, {
     signaling._pendingJoin = null;
     state.realRoomCode = payload.room_code;
     state.peerSessionId = payload.peer_session_id;
+    if (payload.reconnect_token) {
+      state.reconnectToken = payload.reconnect_token;
+    }
     toast(`Peer connected to signaling room ${payload.room_code}. Initializing WebRTC...`, 'info', 3000);
 
     // Both peers present: initiate WebRTC peer connection
@@ -212,7 +223,134 @@ export function initConnectionController(root = document, {
     }
   });
 
+  signaling.on('reconnecting', (info) => {
+    state.isSignalingReconnecting = true;
+    state.signalingReconnectAttempt = info.attempt || 1;
+    refreshSessionUI();
+    if (info.attempt === 1) {
+      toast('Signaling connection lost. Reconnecting to room...', 'warning', 3000);
+    }
+  });
+
+  signaling.on('reconnected', async (payload) => {
+    state.isSignalingReconnecting = false;
+    state.signalingReconnectAttempt = 0;
+    state.realRoomCode = payload.room_code || state.realRoomCode;
+    state.realSessionId = payload.session_id || state.realSessionId;
+    state.realRole = payload.role || state.realRole;
+    state.reconnectToken = payload.reconnect_token;
+    state.peerSessionId = payload.peer_session_id || null;
+
+    // Attempt WebRTC recovery if peer is present and data channel is not open
+    if (payload.peer_session_id && !peerConnection.isChatReady()) {
+      if (peerConnection.pc && peerConnection.pc.connectionState !== 'closed') {
+        peerConnection.attemptIceRestart('Signaling reconnected');
+      } else if (state.realRole === 'host') {
+        try {
+          await peerConnection.startPeerConnection('host');
+        } catch (err) {
+          console.error('WebRTC restart error on reconnected:', err);
+        }
+      }
+    }
+
+    refreshSessionUI();
+    if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
+    if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
+    toast('Reconnected to signaling room!', 'success', 3000);
+  });
+
+  signaling.on('peerDisconnected', (payload) => {
+    state.isPeerDisconnected = true;
+    const grace = Number(payload.grace_period) || 30.0;
+    state.peerDisconnectGracePeriod = grace;
+    state.peerDisconnectDeadline = Date.now() + (grace * 1000);
+
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+    }
+    peerDisconnectTimer = setInterval(() => {
+      const remaining = Math.max(0, Math.ceil((state.peerDisconnectDeadline - Date.now()) / 1000));
+      if (remaining <= 0) {
+        clearInterval(peerDisconnectTimer);
+        peerDisconnectTimer = null;
+      }
+      refreshSessionUI();
+    }, 1000);
+
+    state.realChatMessages.push({
+      id: `sys-peer-dc-${Date.now()}`,
+      sender: 'system',
+      text: `Peer disconnected unexpectedly. Slot reserved for ${Math.round(grace)}s reconnect grace period...`,
+      timestamp: formatTime(new Date()),
+      isReal: true,
+    });
+
+    refreshSessionUI();
+    if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
+    if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
+    toast(`Peer disconnected temporarily. Waiting up to ${Math.round(grace)}s for reconnect...`, 'warning', 4000);
+  });
+
+  signaling.on('peerReconnected', async (payload) => {
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+      peerDisconnectTimer = null;
+    }
+    state.isPeerDisconnected = false;
+    state.peerDisconnectGracePeriod = null;
+    state.peerDisconnectDeadline = null;
+    state.peerSessionId = payload.peer_session_id || state.peerSessionId;
+
+    state.realChatMessages.push({
+      id: `sys-peer-rc-${Date.now()}`,
+      sender: 'system',
+      text: 'Peer reconnected to room! Restoring WebRTC connection...',
+      timestamp: formatTime(new Date()),
+      isReal: true,
+    });
+
+    if (!peerConnection.isChatReady()) {
+      if (peerConnection.pc && peerConnection.pc.connectionState !== 'closed') {
+        peerConnection.attemptIceRestart('Peer reconnected');
+      } else if (state.realRole === 'host') {
+        try {
+          await peerConnection.startPeerConnection('host');
+        } catch (err) {
+          console.error('WebRTC restart error on peerReconnected:', err);
+        }
+      }
+    }
+
+    refreshSessionUI();
+    if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
+    if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
+    toast('Peer reconnected to signaling room!', 'info', 3000);
+  });
+
+  signaling.on('reconnectFailed', (payload) => {
+    state.isSignalingReconnecting = false;
+    state.signalingReconnectAttempt = 0;
+    state.reconnectToken = null;
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+      peerDisconnectTimer = null;
+    }
+    state.isPeerDisconnected = false;
+    state.peerDisconnectGracePeriod = null;
+    state.peerDisconnectDeadline = null;
+    refreshSessionUI();
+    toast(`Reconnection failed: ${payload.message || 'Attempts exhausted.'}`, 'error', 5000);
+  });
+
   signaling.on('peerLeft', () => {
+    if (peerDisconnectTimer) {
+      clearInterval(peerDisconnectTimer);
+      peerDisconnectTimer = null;
+    }
+    state.isPeerDisconnected = false;
+    state.peerDisconnectGracePeriod = null;
+    state.peerDisconnectDeadline = null;
     state.peerSessionId = null;
     peerConnection.close();
 

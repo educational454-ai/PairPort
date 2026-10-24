@@ -25,14 +25,29 @@ export function computeSessionStatusInfo(currentState = state) {
   const isFileChannelOpen = currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
   const isSessionActive = currentState.signalingState !== SIGNALING_STATES.IDLE;
   const isReconnecting = currentState.isReconnecting;
+  const isSignalingReconnecting = currentState.isSignalingReconnecting;
+  const isPeerDisconnected = currentState.isPeerDisconnected;
   const isPeerFailed = currentState.peerConnectionState === PEER_CONNECTION_STATES.FAILED;
   const isRelayActive = currentState.connectionDiagnostics?.isRelay;
+
+  let remainingPeerSec = 0;
+  if (isPeerDisconnected && currentState.peerDisconnectDeadline) {
+    remainingPeerSec = Math.max(0, Math.ceil((currentState.peerDisconnectDeadline - Date.now()) / 1000));
+  }
 
   let statusDotClass = 'waiting';
   let statusPillHtml = `Status: <strong>Idle</strong> (Pair above to connect)`;
   let metaBadgeText = 'P2P Ready';
 
-  if (isReconnecting) {
+  if (isSignalingReconnecting) {
+    statusDotClass = 'reconnecting';
+    statusPillHtml = `Signaling: <strong>Reconnecting (${currentState.signalingReconnectAttempt || 1}/5)</strong>`;
+    metaBadgeText = 'Reconnecting Signaling...';
+  } else if (isPeerDisconnected) {
+    statusDotClass = 'reconnecting';
+    statusPillHtml = `Peer Disconnected: <strong>Waiting (${remainingPeerSec}s grace)</strong>`;
+    metaBadgeText = `Peer Disconnected (${remainingPeerSec}s)`;
+  } else if (isReconnecting) {
     statusDotClass = 'reconnecting';
     statusPillHtml = `Reconnecting: <strong>Attempt ${currentState.reconnectAttempt || 1}/3</strong> (Recovering link...)`;
     metaBadgeText = 'Reconnecting WebRTC...';
@@ -64,6 +79,8 @@ export function computeSessionStatusInfo(currentState = state) {
     isFileChannelOpen,
     isSessionActive,
     isReconnecting,
+    isSignalingReconnecting,
+    isPeerDisconnected,
     isPeerFailed,
     isRelayActive,
   };
@@ -90,14 +107,27 @@ export function renderLiveSessionPanel(currentState = state) {
   const isPeerConnecting = currentState.peerConnectionState === PEER_CONNECTION_STATES.CONNECTING;
   const isPeerFailed = currentState.peerConnectionState === PEER_CONNECTION_STATES.FAILED;
   const isReconnecting = currentState.isReconnecting;
+  const isSignalingReconnecting = currentState.isSignalingReconnecting;
+  const isPeerDisconnected = currentState.isPeerDisconnected;
   const isDataChannelOpen = currentState.dataChannelState === DATA_CHANNEL_STATES.OPEN;
   const isFileChannelOpen = currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
   const isRelayActive = currentState.connectionDiagnostics?.isRelay;
 
+  let remainingPeerSec = 0;
+  if (isPeerDisconnected && currentState.peerDisconnectDeadline) {
+    remainingPeerSec = Math.max(0, Math.ceil((currentState.peerDisconnectDeadline - Date.now()) / 1000));
+  }
+
   let overallStatusClass = 'waiting';
   let overallStatusText = 'Connecting...';
 
-  if (isReconnecting) {
+  if (isSignalingReconnecting) {
+    overallStatusClass = 'reconnecting';
+    overallStatusText = `Reconnecting to signaling server (Attempt ${currentState.signalingReconnectAttempt || 1}/5)...`;
+  } else if (isPeerDisconnected) {
+    overallStatusClass = 'reconnecting';
+    overallStatusText = `Peer disconnected temporarily. Waiting for peer to reconnect (${remainingPeerSec}s remaining)...`;
+  } else if (isReconnecting) {
     overallStatusClass = 'reconnecting';
     overallStatusText = `Reconnecting WebRTC link (Attempt ${currentState.reconnectAttempt || 1}/3)...`;
   } else if (isPeerFailed) {
@@ -184,7 +214,17 @@ export function renderLiveSessionPanel(currentState = state) {
         </div>
         <div class="detail-item">
           <span class="detail-label">Signaling Status</span>
-          <span class="detail-val">${isSignalingConnected ? 'Connected (2 Peers)' : isWaiting ? 'Waiting for Peer (1/2)' : 'Connecting...'}</span>
+          <span class="detail-val">${
+            isSignalingReconnecting
+              ? `Reconnecting (${currentState.signalingReconnectAttempt || 1}/5)`
+              : isPeerDisconnected
+              ? `Peer Disconnected (${remainingPeerSec}s)`
+              : isSignalingConnected
+              ? 'Connected (2 Peers)'
+              : isWaiting
+              ? 'Waiting for Peer (1/2)'
+              : 'Connecting...'
+          }</span>
         </div>
         <div class="detail-item">
           <span class="detail-label">WebRTC Peer Connection</span>
@@ -210,7 +250,7 @@ export function renderLiveSessionPanel(currentState = state) {
             <span>Connection Diagnostics & ICE Telemetry</span>
           </span>
           <span class="diagnostics-mode-badge ${
-            isReconnecting
+            isSignalingReconnecting || isPeerDisconnected || isReconnecting
               ? 'badge-reconnecting'
               : diag.isRelay
               ? 'badge-relay'
@@ -219,7 +259,11 @@ export function renderLiveSessionPanel(currentState = state) {
               : 'badge-neutral'
           }">
             ${
-              isReconnecting
+              isSignalingReconnecting
+                ? `Signaling (${currentState.signalingReconnectAttempt || 1}/5)`
+                : isPeerDisconnected
+                ? `Peer Reconnecting (${remainingPeerSec}s)`
+                : isReconnecting
                 ? `Reconnecting (${currentState.reconnectAttempt || 1}/3)`
                 : diag.isRelay
                 ? 'TURN Relay'
@@ -234,7 +278,11 @@ export function renderLiveSessionPanel(currentState = state) {
             <span class="diag-label">Connection Mode</span>
             <span class="diag-value ${diag.isRelay ? 'val-relay' : isPeerConnected ? 'val-direct' : ''}">
               ${
-                diag.isRelay
+                isSignalingReconnecting
+                  ? 'Reconnecting Signaling'
+                  : isPeerDisconnected
+                  ? 'Peer Disconnected (Grace Period)'
+                  : diag.isRelay
                   ? 'Relayed (TURN Transport)'
                   : isPeerConnected
                   ? 'Direct P2P (Peer-to-Peer)'

@@ -177,12 +177,18 @@ export function updateChatUI(root, currentState = state) {
     const isChatAllowed =
       isDataChannelOpen &&
       !currentState.isReconnecting &&
+      !currentState.isSignalingReconnecting &&
+      !currentState.isPeerDisconnected &&
       currentState.peerConnectionState === PEER_CONNECTION_STATES.CONNECTED;
 
     chatInput.disabled = !isChatAllowed;
     chatSendBtn.disabled = !isChatAllowed;
 
-    if (currentState.isReconnecting) {
+    if (currentState.isPeerDisconnected) {
+      chatInput.placeholder = 'Peer disconnected temporarily. Waiting for peer reconnect...';
+    } else if (currentState.isSignalingReconnecting) {
+      chatInput.placeholder = 'Signaling disconnected. Reconnecting...';
+    } else if (currentState.isReconnecting) {
       chatInput.placeholder = `Reconnecting to peer (Attempt ${currentState.reconnectAttempt || 1}/3)... In-flight chat paused.`;
     } else if (currentState.peerConnectionState === PEER_CONNECTION_STATES.FAILED) {
       chatInput.placeholder = 'Connection failed. Re-pair above or check TURN configuration.';

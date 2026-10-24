@@ -282,13 +282,22 @@ export function updateFilesUI(
 
   const isFileChannelOpen =
     (currentState && currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN) || isReady;
+  const isFileTransferAllowed =
+    isFileChannelOpen &&
+    !currentState?.isPeerDisconnected &&
+    !currentState?.isSignalingReconnecting &&
+    !currentState?.isReconnecting;
   const files = currentState && currentState.realFiles ? currentState.realFiles : [];
 
   // Update file channel badge
   const badge = root.querySelector('#file-channel-badge');
   if (badge) {
-    badge.className = `badge ${isFileChannelOpen ? 'badge-success' : 'badge-subtle'}`;
-    badge.textContent = isFileChannelOpen ? 'P2P FileChannel Open' : 'Waiting for Peer';
+    badge.className = `badge ${isFileTransferAllowed ? 'badge-success' : 'badge-subtle'}`;
+    badge.textContent = isFileTransferAllowed
+      ? 'P2P FileChannel Open'
+      : currentState?.isPeerDisconnected
+      ? 'Peer Disconnected'
+      : 'Waiting for Peer';
   }
 
   // Update dropzone styling and accessibility
@@ -296,19 +305,21 @@ export function updateFilesUI(
   const fileBrowseInput = root.querySelector('#file-browse-input');
   const browseBtn = root.querySelector('#browse-files-btn');
   if (dropZone) {
-    dropZone.classList.toggle('drop-zone-disabled', !isFileChannelOpen);
+    dropZone.classList.toggle('drop-zone-disabled', !isFileTransferAllowed);
     const titleEl = dropZone.querySelector('.drop-zone-title');
     if (titleEl) {
-      titleEl.textContent = isFileChannelOpen
+      titleEl.textContent = isFileTransferAllowed
         ? 'Drop files here to share directly'
+        : currentState?.isPeerDisconnected
+        ? 'Peer disconnected temporarily. Waiting for peer reconnect...'
         : 'Connect to a peer to enable file transfers';
     }
   }
   if (fileBrowseInput) {
-    fileBrowseInput.disabled = !isFileChannelOpen;
+    fileBrowseInput.disabled = !isFileTransferAllowed;
   }
   if (browseBtn) {
-    browseBtn.disabled = !isFileChannelOpen;
+    browseBtn.disabled = !isFileTransferAllowed;
   }
 
   // Update active transfer panel

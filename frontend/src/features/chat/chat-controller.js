@@ -80,7 +80,7 @@ export function initChat(root = document, {
       const text = chatInput.value;
       if (!text || !text.trim()) return;
 
-      if (!peerConnection.isChatReady()) {
+      if (!peerConnection.isChatReady() || state.isPeerDisconnected || state.isSignalingReconnecting) {
         toast('WebRTC DataChannel is not open. Connect with a peer first.', 'warning', 3500);
         return;
       }
