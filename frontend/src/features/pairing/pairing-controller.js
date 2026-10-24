@@ -20,11 +20,18 @@ import { setFeedback } from './pairing-ui.js';
  *
  * @param {HTMLInputElement} inputEl - Room code input element
  * @param {HTMLElement} feedbackEl - Target feedback container
+ * @param {object} [signaling=signalingClient] - Signaling client instance
  */
-export function validateJoinInput(inputEl, feedbackEl) {
+export function validateJoinInput(inputEl, feedbackEl, signaling = signalingClient) {
   if (!inputEl) return;
+  const sig = signaling || signalingClient;
   const val = inputEl.value.trim();
   if (!val) {
+    // Input is empty: invalidate bound token in app state and signaling client
+    state.invitationToken = null;
+    state.invitationRoomCode = null;
+    sig.invitationToken = null;
+    sig.invitationRoomCode = null;
     setFeedback(feedbackEl, '', 'clear');
     return;
   }
@@ -32,22 +39,58 @@ export function validateJoinInput(inputEl, feedbackEl) {
   // Check if user input is an invitation URL, fragment, or query
   if (val.includes('#') || val.includes('?') || val.includes('token=') || val.length > 16) {
     const invite = parseInvitation(val);
-    if (invite.isValid) {
+    if (invite.isValid && invite.invitationToken) {
       state.invitationToken = invite.invitationToken;
+      state.invitationRoomCode = invite.roomCode;
+      sig.invitationToken = invite.invitationToken;
+      sig.invitationRoomCode = invite.roomCode;
       inputEl.value = invite.roomCode;
       setFeedback(feedbackEl, `Secure invitation verified for room ${invite.roomCode}. Click Join to connect.`, 'success');
       return;
     } else if (invite.error === 'INVALID_TOKEN_FORMAT') {
+      state.invitationToken = null;
+      state.invitationRoomCode = null;
+      sig.invitationToken = null;
+      sig.invitationRoomCode = null;
       setFeedback(feedbackEl, 'Invitation token format is invalid.', 'error');
+      return;
+    } else if (val.includes('token=') || val.includes('#join')) {
+      state.invitationToken = null;
+      state.invitationRoomCode = null;
+      sig.invitationToken = null;
+      sig.invitationRoomCode = null;
+      setFeedback(feedbackEl, invite.message || 'Invalid invitation link or room code format.', 'error');
       return;
     }
   }
 
   const result = validateRoomCode(val);
   if (!result.isValid) {
+    // Incomplete or invalid room code: invalidate previously bound token
+    if (state.invitationRoomCode) {
+      state.invitationToken = null;
+      state.invitationRoomCode = null;
+      sig.invitationToken = null;
+      sig.invitationRoomCode = null;
+    }
     setFeedback(feedbackEl, result.message, 'warning');
   } else {
-    setFeedback(feedbackEl, 'Format looks valid. Click Join to connect.', 'success');
+    // Valid format. Check if this matches the bound invitation room
+    if (state.invitationRoomCode) {
+      if (state.invitationRoomCode === result.code && state.invitationToken) {
+        // Harmless normalization (e.g. lowercase or whitespace): keep token valid!
+        setFeedback(feedbackEl, `Secure invitation verified for room ${result.code}. Click Join to connect.`, 'success');
+      } else {
+        // Code changed to a DIFFERENT room: invalidate bound token
+        state.invitationToken = null;
+        state.invitationRoomCode = null;
+        sig.invitationToken = null;
+        sig.invitationRoomCode = null;
+        setFeedback(feedbackEl, 'Format looks valid. Click Join to connect.', 'success');
+      }
+    } else {
+      setFeedback(feedbackEl, 'Format looks valid. Click Join to connect.', 'success');
+    }
   }
 }
 
@@ -98,18 +141,36 @@ export function initPairing(
   // 0. Auto-detect invitation in URL fragment (#join?room=...&token=...)
   const locationInvite = parseAndClearLocationInvitation(location, history);
   if (locationInvite) {
-    state.invitationToken = locationInvite.invitationToken;
-    if (roomCodeInput) {
-      roomCodeInput.value = locationInvite.roomCode;
+    if (locationInvite.isValid && locationInvite.invitationToken) {
+      state.invitationToken = locationInvite.invitationToken;
+      state.invitationRoomCode = locationInvite.roomCode;
+      signaling.invitationToken = locationInvite.invitationToken;
+      signaling.invitationRoomCode = locationInvite.roomCode;
+      if (roomCodeInput) {
+        roomCodeInput.value = locationInvite.roomCode;
+      }
+      if (feedbackEl) {
+        setFeedback(
+          feedbackEl,
+          `Secure invitation loaded for room ${locationInvite.roomCode}. Click Join to connect.`,
+          'success',
+        );
+      }
+      toast(`Loaded invitation for room ${locationInvite.roomCode}`, 'info', 3000);
+    } else {
+      state.invitationToken = null;
+      state.invitationRoomCode = null;
+      signaling.invitationToken = null;
+      signaling.invitationRoomCode = null;
+      if (feedbackEl) {
+        setFeedback(
+          feedbackEl,
+          locationInvite.message || 'Invalid or malformed invitation link.',
+          'error',
+        );
+      }
+      toast(locationInvite.message || 'Invalid invitation link in URL.', 'warning', 4000);
     }
-    if (feedbackEl) {
-      setFeedback(
-        feedbackEl,
-        `Secure invitation loaded for room ${locationInvite.roomCode}. Click Join to connect.`,
-        'success',
-      );
-    }
-    toast(`Loaded invitation for room ${locationInvite.roomCode}`, 'info', 3000);
   }
 
   // 1. Real Room Creation Button
@@ -180,7 +241,7 @@ export function initPairing(
     pasteSampleBtn.addEventListener('click', () => {
       roomCodeInput.value = state.realRoomCode || APP_CONFIG.demoData.roomCode;
       roomCodeInput.focus();
-      validateJoinInput(roomCodeInput, feedbackEl);
+      validateJoinInput(roomCodeInput, feedbackEl, signaling);
     });
   }
 
@@ -193,7 +254,7 @@ export function initPairing(
       if (!val.includes('#') && !val.includes('?') && !val.includes('http') && !val.includes('token=')) {
         roomCodeInput.value = roomCodeInput.value.toUpperCase();
       }
-      validateJoinInput(roomCodeInput, feedbackEl);
+      validateJoinInput(roomCodeInput, feedbackEl, signaling);
     });
 
     joinForm.addEventListener('submit', (e) => {
@@ -205,6 +266,9 @@ export function initPairing(
         const invite = parseInvitation(rawVal);
         if (invite.isValid && invite.invitationToken) {
           state.invitationToken = invite.invitationToken;
+          state.invitationRoomCode = invite.roomCode;
+          signaling.invitationToken = invite.invitationToken;
+          signaling.invitationRoomCode = invite.roomCode;
           roomCodeInput.value = invite.roomCode;
         }
       }
@@ -219,7 +283,12 @@ export function initPairing(
       }
 
       const token = state.invitationToken;
-      if (!token) {
+      const boundRoom = state.invitationRoomCode;
+      if (!token || !boundRoom || boundRoom !== result.code) {
+        state.invitationToken = null;
+        state.invitationRoomCode = null;
+        signaling.invitationToken = null;
+        signaling.invitationRoomCode = null;
         setFeedback(
           feedbackEl,
           'An authorized invitation link or token is required to join this room.',

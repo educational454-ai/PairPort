@@ -6,9 +6,11 @@ import {
   parseInvitation,
   parseAndClearLocationInvitation,
   copyInvitationToClipboard,
+  isInvitationFragment,
 } from '../src/utils/invitation.js';
 import { SignalingClient, SIGNALING_STATES } from '../src/services/signaling.js';
-import { createInitialState, resetSessionState } from '../src/state/app-state.js';
+import { createInitialState, resetSessionState, state } from '../src/state/app-state.js';
+import { initConnectionController } from '../src/features/connection/connection-controller.js';
 
 describe('1. createInvitationUrl', () => {
   it('creates shareable URL containing room code and token in the URL fragment (#)', () => {
@@ -93,7 +95,20 @@ describe('2. parseInvitation', () => {
   });
 });
 
-describe('3. parseAndClearLocationInvitation', () => {
+describe('3. parseAndClearLocationInvitation & isInvitationFragment', () => {
+  it('detects invitation fragment forms accurately via isInvitationFragment', () => {
+    assert.equal(isInvitationFragment('#join?room=PORT-7K2M9X&token=123'), true);
+    assert.equal(isInvitationFragment('#join'), true);
+    assert.equal(isInvitationFragment('#token=abc12345'), true);
+    assert.equal(isInvitationFragment('#invitation_token=xyz'), true);
+    assert.equal(isInvitationFragment('#invite=port'), true);
+    assert.equal(isInvitationFragment('#features'), false);
+    assert.equal(isInvitationFragment('#how-it-works'), false);
+    assert.equal(isInvitationFragment('#about'), false);
+    assert.equal(isInvitationFragment(''), false);
+    assert.equal(isInvitationFragment(null), false);
+  });
+
   it('extracts invitation and clears sensitive fragment from URL via history.replaceState', () => {
     let replacedUrl = null;
     const fakeLocation = {
@@ -109,12 +124,98 @@ describe('3. parseAndClearLocationInvitation', () => {
 
     const result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
     assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.urlCleared, true);
     assert.equal(result.roomCode, 'PORT-7K2M9X');
     assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
     assert.equal(replacedUrl, '/pairport/', 'Sensitive fragment must be removed from URL bar');
   });
 
-  it('returns null and does not invoke replaceState if hash is empty or not an invitation', () => {
+  it('clears malformed room/token invitation fragments via history.replaceState', () => {
+    let replacedUrl = null;
+    const fakeLocation = {
+      hash: '#join?room=INVALID_TOO_LONG&token=short',
+      pathname: '/app/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: (state, title, url) => {
+        replacedUrl = url;
+      },
+    };
+
+    const result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
+    assert.ok(result);
+    assert.equal(result.isValid, false);
+    assert.equal(result.urlCleared, true, 'Malformed invitation fragment must still be cleared from address bar');
+    assert.equal(replacedUrl, '/app/');
+    assert.equal(result.invitationToken, null);
+  });
+
+  it('handles malformed percent-encoding safely without throwing and clears URL', () => {
+    let replacedUrl = null;
+    const fakeLocation = {
+      hash: '#join?room=%E0%A4%A&token=%99',
+      pathname: '/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: (state, title, url) => {
+        replacedUrl = url;
+      },
+    };
+
+    let result;
+    assert.doesNotThrow(() => {
+      result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
+    });
+    assert.ok(result);
+    assert.equal(result.isValid, false);
+    assert.equal(result.urlCleared, true);
+    assert.equal(replacedUrl, '/');
+  });
+
+  it('leaves unrelated URL hashes intact and does not invoke replaceState', () => {
+    let replacedUrl = null;
+    const fakeLocation = {
+      hash: '#features',
+      pathname: '/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: (state, title, url) => {
+        replacedUrl = url;
+      },
+    };
+
+    const result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
+    assert.equal(result, null, 'Non-invitation hashes must return null');
+    assert.equal(replacedUrl, null, 'replaceState must NOT be invoked on regular navigation hashes');
+  });
+
+  it('handles replaceState failure gracefully without crashing and reports urlCleared: false', () => {
+    const fakeLocation = {
+      hash: '#join?room=PORT-7K2M9X&token=0123456789abcdef0123456789abcdef',
+      pathname: '/pairport/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: () => {
+        throw new Error('SecurityError: Sandbox origin restriction');
+      },
+    };
+
+    let result;
+    assert.doesNotThrow(() => {
+      result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
+    });
+    assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.roomCode, 'PORT-7K2M9X');
+    assert.equal(result.urlCleared, false, 'Must accurately reflect residual limitation when replaceState fails');
+  });
+
+  it('returns null and does not invoke replaceState if hash is empty', () => {
     let replacedUrl = null;
     const fakeLocation = { hash: '', pathname: '/' };
     const fakeHistory = {
@@ -293,31 +394,157 @@ describe('5. SignalingClient Invitation Flow & Authorization Protocol', () => {
     }
   });
 
-  it('clears invitationToken from memory on leaveRoom', () => {
+  it('clears invitationToken, invitationRoomCode, and _pendingJoin on leaveRoom', () => {
     client.invitationToken = 'active-secret-token';
+    client.invitationRoomCode = 'PORT-7K2M9X';
+    client._pendingJoin = { roomCode: 'PORT-7K2M9X', token: 'active-secret-token', generation: 1 };
     client.leaveRoom();
     assert.equal(client.invitationToken, null);
+    assert.equal(client.invitationRoomCode, null);
+    assert.equal(client._pendingJoin, null);
+  });
+
+  it('binds room code to invitationRoomCode on roomCreated and joinRoom', () => {
+    client._handleMessage(JSON.stringify({
+      type: 'room-created',
+      payload: {
+        room_code: 'PORT-8M3K2W',
+        role: 'host',
+        invitation_token: 'auth-token-c0ffee-1234567890',
+      },
+    }));
+    assert.equal(client.invitationToken, 'auth-token-c0ffee-1234567890');
+    assert.equal(client.invitationRoomCode, 'PORT-8M3K2W');
+
+    client.leaveRoom();
+    assert.equal(client.invitationToken, null);
+    assert.equal(client.invitationRoomCode, null);
+
+    client.joinRoom('PORT-112233', 'valid-token-abcdef123456');
+    assert.equal(client.invitationToken, 'valid-token-abcdef123456');
+    assert.equal(client.invitationRoomCode, 'PORT-112233');
+    assert.ok(client._pendingJoin);
+    assert.equal(client._pendingJoin.roomCode, 'PORT-112233');
+    assert.equal(client._pendingJoin.token, 'valid-token-abcdef123456');
   });
 });
 
 describe('6. State & Token Lifecycle Security', () => {
-  it('initializes invitationToken to null and clears it on resetSessionState', () => {
+  it('initializes invitationToken and invitationRoomCode to null and clears them on resetSessionState', () => {
     const s = createInitialState();
     assert.equal(s.invitationToken, null);
+    assert.equal(s.invitationRoomCode, null);
 
     s.invitationToken = 'memory-only-secret-token';
+    s.invitationRoomCode = 'PORT-7K2M9X';
     resetSessionState(s);
     assert.equal(s.invitationToken, null);
+    assert.equal(s.invitationRoomCode, null);
   });
 
   it('verifies invitation tokens are not persisted to storage', () => {
     if (typeof localStorage !== 'undefined') {
       assert.equal(localStorage.getItem('invitation_token'), null);
       assert.equal(localStorage.getItem('token'), null);
+      assert.equal(localStorage.getItem('invitationRoomCode'), null);
     }
     if (typeof sessionStorage !== 'undefined') {
       assert.equal(sessionStorage.getItem('invitation_token'), null);
       assert.equal(sessionStorage.getItem('token'), null);
+      assert.equal(sessionStorage.getItem('invitationRoomCode'), null);
     }
+  });
+});
+
+describe('7. Connection Controller Join Error Cleanup & Race Guards', () => {
+  function createFakeRoot() {
+    const el = {
+      classList: { add: () => {}, remove: () => {}, toggle: () => {} },
+      textContent: '',
+      addEventListener: () => {},
+      dataset: {},
+      querySelector: () => el,
+      querySelectorAll: () => [],
+    };
+    return el;
+  }
+
+  it('clears attempted token and room binding on invitation error and returns to idle state', () => {
+    const testClient = new SignalingClient('ws://127.0.0.1:8000/ws');
+    const fakeRoot = createFakeRoot();
+    initConnectionController(fakeRoot, { signaling: testClient, toast: () => {} });
+
+    // Simulate join attempt
+    testClient.joinRoom('PORT-7K2M9X', 'failed-token-12345678');
+    state.invitationToken = 'failed-token-12345678';
+    state.invitationRoomCode = 'PORT-7K2M9X';
+
+    // Simulate server returning INVITATION_EXPIRED
+    testClient._handleMessage(JSON.stringify({
+      type: 'error',
+      payload: {
+        code: 'INVITATION_EXPIRED',
+        message: 'This invitation has expired.',
+      },
+    }));
+
+    assert.equal(state.invitationToken, null, 'State invitation token must be cleared on expiration error');
+    assert.equal(state.invitationRoomCode, null, 'State invitation room must be cleared on expiration error');
+    assert.equal(testClient.invitationToken, null, 'Signaling invitation token must be cleared');
+    assert.equal(testClient.invitationRoomCode, null, 'Signaling invitation room must be cleared');
+    assert.equal(state.signalingState, SIGNALING_STATES.IDLE, 'UI must return to IDLE state so user can retry');
+    assert.equal(testClient._pendingJoin, null);
+  });
+
+  it('does NOT clear a newly captured token if a delayed error arrives from an older attempt', () => {
+    const testClient = new SignalingClient('ws://127.0.0.1:8000/ws');
+    const fakeRoot = createFakeRoot();
+    initConnectionController(fakeRoot, { signaling: testClient, toast: () => {} });
+
+    // Attempt 1: user attempted Room A with Token A
+    testClient.joinRoom('PORT-AAAAAA', 'token-attempt-1-11111');
+    state.invitationToken = 'token-attempt-1-11111';
+    state.invitationRoomCode = 'PORT-AAAAAA';
+
+    // While attempt 1 is in-flight, user receives/pastes a brand new invitation for Room B
+    const newerToken = 'token-attempt-2-22222';
+    const newerRoom = 'PORT-BBBBBB';
+    state.invitationToken = newerToken;
+    state.invitationRoomCode = newerRoom;
+    testClient.invitationToken = newerToken;
+    testClient.invitationRoomCode = newerRoom;
+
+    // Delayed error arrives for attempt 1
+    testClient._handleMessage(JSON.stringify({
+      type: 'error',
+      payload: {
+        code: 'INVALID_INVITATION',
+        message: 'Invalid invitation token for room.',
+      },
+    }));
+
+    // The newer token must NOT be erased by the delayed error from attempt 1
+    assert.equal(state.invitationToken, newerToken, 'Newer token must be preserved');
+    assert.equal(state.invitationRoomCode, newerRoom, 'Newer room binding must be preserved');
+    assert.equal(testClient.invitationToken, newerToken, 'Signaling client newer token must be preserved');
+    assert.equal(testClient.invitationRoomCode, newerRoom, 'Signaling client newer room must be preserved');
+  });
+
+  it('resets state and signaling completely on handleLeave', () => {
+    const testClient = new SignalingClient('ws://127.0.0.1:8000/ws');
+    const fakeRoot = createFakeRoot();
+    const controller = initConnectionController(fakeRoot, { signaling: testClient, toast: () => {} });
+
+    state.invitationToken = 'active-token-12345';
+    state.invitationRoomCode = 'PORT-123456';
+    testClient.invitationToken = 'active-token-12345';
+    testClient.invitationRoomCode = 'PORT-123456';
+
+    controller.handleLeave();
+
+    assert.equal(state.invitationToken, null);
+    assert.equal(state.invitationRoomCode, null);
+    assert.equal(testClient.invitationToken, null);
+    assert.equal(testClient.invitationRoomCode, null);
   });
 });

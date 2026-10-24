@@ -44,28 +44,65 @@ describe('2. setFeedback', () => {
 });
 
 describe('3. validateJoinInput', () => {
-  it('clears feedback when input is empty', () => {
+  it('clears feedback and invalidates bound token when input is empty', () => {
+    state.invitationToken = 'temp-token-12345';
+    state.invitationRoomCode = 'PORT-112233';
     const feedback = { textContent: 'previous', className: 'form-feedback' };
     const input = { value: '   ' };
     validateJoinInput(input, feedback);
     assert.equal(feedback.textContent, '');
     assert.equal(feedback.className, 'form-feedback feedback-clear');
+    assert.equal(state.invitationToken, null);
+    assert.equal(state.invitationRoomCode, null);
   });
 
-  it('sets warning feedback when room code is incomplete or invalid', () => {
+  it('sets warning feedback and invalidates bound token when room code is incomplete or invalid', () => {
+    state.invitationToken = 'temp-token-12345';
+    state.invitationRoomCode = 'PORT-112233';
     const feedback = { textContent: '', className: '' };
     const input = { value: 'AB' }; // Too short
     validateJoinInput(input, feedback);
     assert.equal(feedback.className, 'form-feedback feedback-warning');
     assert.ok(feedback.textContent.length > 0);
+    assert.equal(state.invitationToken, null);
+    assert.equal(state.invitationRoomCode, null);
   });
 
-  it('sets success feedback when code format is valid', () => {
+  it('sets success feedback and invalidates bound token when code is edited to a different room', () => {
+    state.invitationToken = 'token-for-room-1';
+    state.invitationRoomCode = 'PORT-AAAAAA';
     const feedback = { textContent: '', className: '' };
-    const input = { value: 'PORT-ABCD' };
+    const input = { value: 'PORT-BBBBBB' };
     validateJoinInput(input, feedback);
     assert.equal(feedback.className, 'form-feedback feedback-success');
     assert.ok(feedback.textContent.includes('looks valid'));
+    assert.equal(state.invitationToken, null, 'Token must be invalidated when switching rooms');
+    assert.equal(state.invitationRoomCode, null);
+  });
+
+  it('preserves bound token on harmless normalization (lowercase, extra spaces) of same room', () => {
+    state.invitationToken = 'token-for-room-1';
+    state.invitationRoomCode = 'PORT-AAAAAA';
+    const feedback = { textContent: '', className: '' };
+    const input = { value: '  port-aaaaaa  ' };
+    validateJoinInput(input, feedback);
+    assert.equal(feedback.className, 'form-feedback feedback-success');
+    assert.ok(feedback.textContent.includes('Secure invitation verified'));
+    assert.equal(state.invitationToken, 'token-for-room-1', 'Harmless normalization must keep token intact');
+    assert.equal(state.invitationRoomCode, 'PORT-AAAAAA');
+  });
+
+  it('parses pasted invitation URL/fragment and stores room and token binding', () => {
+    state.invitationToken = null;
+    state.invitationRoomCode = null;
+    const feedback = { textContent: '', className: '' };
+    const input = { value: 'https://pairport.app/#join?room=PORT-7K2M9X&token=0123456789abcdef0123456789abcdef' };
+    validateJoinInput(input, feedback);
+    assert.equal(input.value, 'PORT-7K2M9X');
+    assert.equal(state.invitationToken, '0123456789abcdef0123456789abcdef');
+    assert.equal(state.invitationRoomCode, 'PORT-7K2M9X');
+    assert.equal(feedback.className, 'form-feedback feedback-success');
+    assert.ok(feedback.textContent.includes('verified'));
   });
 });
 
@@ -207,12 +244,22 @@ describe('5. initPairing and setPairingFeedback', () => {
     submitHandler({ preventDefault: () => {} });
     assert.equal(joinedCode, null, 'Must reject room-code-only join when token is missing');
 
-    // Trigger join form submit WITH authorized token: must call joinRoom with code and token
+    // Trigger join form submit WITH token bound to a DIFFERENT room: must reject and clear token
     state.invitationToken = 'test-token-1234567890abcdef';
+    state.invitationRoomCode = 'PORT-DIFFERENT';
+    submitHandler({ preventDefault: () => {} });
+    assert.equal(joinedCode, null, 'Must reject join when room binding mismatches');
+    assert.equal(state.invitationToken, null, 'Must invalidate mismatched token');
+    assert.equal(state.invitationRoomCode, null);
+
+    // Trigger join form submit WITH authorized token bound to matching room: must call joinRoom with code and token
+    state.invitationToken = 'test-token-1234567890abcdef';
+    state.invitationRoomCode = 'PORT-XYZ9';
     submitHandler({ preventDefault: () => {} });
     assert.equal(joinedCode, 'PORT-XYZ9');
     assert.equal(joinedToken, 'test-token-1234567890abcdef');
     state.invitationToken = null;
+    state.invitationRoomCode = null;
 
     // Idempotency: calling again should return early
     initPairing(fakeRoot, { signaling: mockSignaling, toast: () => {} });

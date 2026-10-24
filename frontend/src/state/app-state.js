@@ -45,6 +45,7 @@ export function createInitialState() {
     realSessionId: null,
     realRole: null,
     invitationToken: null, // In-memory only; never persisted in localStorage or logs
+    invitationRoomCode: null, // Normalized room code bound to invitationToken
     peerSessionId: null,
     signalingError: null,
 
@@ -89,6 +90,7 @@ export function resetSessionState(target = state) {
   target.realSessionId = null;
   target.realRole = null;
   target.invitationToken = null;
+  target.invitationRoomCode = null;
   target.peerSessionId = null;
   target.signalingError = null;
 

@@ -188,14 +188,17 @@ export function initConnectionController(root = document, {
     state.realSessionId = payload.session_id;
     state.realRole = payload.role;
     state.invitationToken = payload.invitation_token || null;
+    state.invitationRoomCode = payload.room_code || null;
     toast(`Real room "${payload.room_code}" created on server!`, 'success');
   });
 
   signaling.on('waiting', () => {
+    signaling._pendingJoin = null;
     toast(`Waiting for peer to join room ${state.realRoomCode || ''}`, 'info', 3000);
   });
 
   signaling.on('peerJoined', async (payload) => {
+    signaling._pendingJoin = null;
     state.realRoomCode = payload.room_code;
     state.peerSessionId = payload.peer_session_id;
     toast(`Peer connected to signaling room ${payload.room_code}. Initializing WebRTC...`, 'info', 3000);
@@ -249,7 +252,49 @@ export function initConnectionController(root = document, {
     } else if (payload.code === 'INVITATION_EXPIRED') {
       errorMsg = 'This invitation token has expired. Request a new invitation from the host.';
     }
+
+    const isInvitationError = [
+      'INVITATION_ALREADY_USED',
+      'INVITATION_REQUIRED',
+      'INVALID_INVITATION',
+      'INVITATION_EXPIRED',
+    ].includes(payload.code);
+
+    const pending = signaling._pendingJoin;
+    if (pending) {
+      // If we had a pending join attempt, only clear if current state still holds the token/room from that attempt.
+      // A delayed error from an older attempt must NOT erase a newly captured token/room binding.
+      const pendingRoom = pending.roomCode || pending.code;
+      const matchesStateToken = !pending.token || state.invitationToken === pending.token;
+      const matchesStateRoom = !pendingRoom || state.invitationRoomCode === pendingRoom;
+      if (matchesStateToken && matchesStateRoom) {
+        state.invitationToken = null;
+        state.invitationRoomCode = null;
+      }
+
+      const matchesSigToken = !pending.token || signaling.invitationToken === pending.token;
+      const matchesSigRoom = !pendingRoom || signaling.invitationRoomCode === pendingRoom;
+      if (matchesSigToken && matchesSigRoom) {
+        signaling.invitationToken = null;
+        signaling.invitationRoomCode = null;
+      }
+
+      signaling._pendingJoin = null;
+    } else if (isInvitationError) {
+      state.invitationToken = null;
+      state.invitationRoomCode = null;
+      signaling.invitationToken = null;
+      signaling.invitationRoomCode = null;
+    }
+
+    // Ensure a failed join returns the UI to a usable idle state so the user can paste a fresh invitation
+    if (state.signalingState !== SIGNALING_STATES.CONNECTED) {
+      state.signalingState = SIGNALING_STATES.IDLE;
+      signaling.state = SIGNALING_STATES.IDLE;
+    }
+
     setPairingFeedback(root, errorMsg, 'error');
+    refreshSessionUI();
     toast(`Error: ${errorMsg}`, 'warning', 5000);
   });
 

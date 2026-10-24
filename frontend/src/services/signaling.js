@@ -25,9 +25,12 @@ export class SignalingClient {
     this.sessionId = null;
     this.role = null;
     this.invitationToken = null;
+    this.invitationRoomCode = null;
     this.peerSessionId = null;
     this.listeners = new Map();
     this.isExplicitLeave = false;
+    this._joinAttemptGeneration = 0;
+    this._pendingJoin = null;
 
     // Clean up socket on window beforeunload
     if (typeof window !== 'undefined') {
@@ -133,6 +136,16 @@ export class SignalingClient {
     this.leaveRoom();
     this.isExplicitLeave = false;
     this.invitationToken = token;
+    this.invitationRoomCode = code;
+
+    this._joinAttemptGeneration = (this._joinAttemptGeneration || 0) + 1;
+    this._pendingJoin = {
+      code,
+      roomCode: code,
+      token,
+      generation: this._joinAttemptGeneration,
+    };
+
     this.setState(SIGNALING_STATES.JOINING);
 
     this._connect((ws) => {
@@ -194,7 +207,9 @@ export class SignalingClient {
     this.sessionId = null;
     this.role = null;
     this.invitationToken = null;
+    this.invitationRoomCode = null;
     this.peerSessionId = null;
+    this._pendingJoin = null;
 
     if (this.state !== SIGNALING_STATES.IDLE) {
       this.setState(SIGNALING_STATES.IDLE);
@@ -278,6 +293,7 @@ export class SignalingClient {
         this.sessionId = payload.session_id;
         this.role = payload.role;
         this.invitationToken = payload.invitation_token || null;
+        this.invitationRoomCode = payload.room_code || null;
         this.emit('roomCreated', payload);
         break;
       }

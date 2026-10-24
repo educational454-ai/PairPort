@@ -79,8 +79,18 @@ export function parseInvitation(input) {
   if (queryString) {
     try {
       const params = new URLSearchParams(queryString);
-      let room = params.get('room') || params.get('code') || params.get('room_code');
-      let token = params.get('token') || params.get('invitation_token') || params.get('invite');
+      let room = null;
+      let token = null;
+      try {
+        room = params.get('room') || params.get('code') || params.get('room_code');
+      } catch {
+        room = null;
+      }
+      try {
+        token = params.get('token') || params.get('invitation_token') || params.get('invite');
+      } catch {
+        token = null;
+      }
 
       if (room && token) {
         room = room.trim().toUpperCase();
@@ -116,8 +126,35 @@ export function parseInvitation(input) {
           message: 'Valid invitation link.',
         };
       }
+
+      if (room && !token) {
+        const roomValidation = validateRoomCode(room.trim().toUpperCase());
+        return {
+          isValid: false,
+          roomCode: roomValidation.isValid ? roomValidation.code : room,
+          invitationToken: null,
+          error: 'INVITATION_REQUIRED',
+          message: 'An invitation token or valid invite link is required to join this room.',
+        };
+      }
+
+      if (!room && token) {
+        return {
+          isValid: false,
+          roomCode: '',
+          invitationToken: null,
+          error: 'MISSING_ROOM_CODE',
+          message: 'Invitation link is missing a room code.',
+        };
+      }
     } catch {
-      // Fall through to plain code check
+      return {
+        isValid: false,
+        roomCode: '',
+        invitationToken: null,
+        error: 'MALFORMED_INVITATION',
+        message: 'Malformed invitation link.',
+      };
     }
   }
 
@@ -143,12 +180,46 @@ export function parseInvitation(input) {
 }
 
 /**
- * Check window.location.hash for a valid invitation, and if found, safely strip
- * the sensitive fragment from the browser URL bar using history.replaceState.
+ * Detect whether a URL hash/fragment is an invitation-related fragment.
+ * Matches:
+ *  - Fragments starting with #join or join (e.g., '#join?room=...', '#join')
+ *  - Fragments containing 'token=' or 'invitation_token=' or 'invite='
+ *
+ * @param {string} hash
+ * @returns {boolean}
+ */
+export function isInvitationFragment(hash) {
+  if (!hash || typeof hash !== 'string') return false;
+  const clean = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!clean) return false;
+
+  if (clean === 'join' || clean.startsWith('join?') || clean.startsWith('join&') || clean.startsWith('join/')) {
+    return true;
+  }
+  if (/(?:^|[?&#])(?:token|invitation_token|invite)=/i.test(clean)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check window.location.hash for an invitation fragment, sanitize the URL bar
+ * using history.replaceState (even if the invitation is invalid or malformed),
+ * and return the safe parsed invitation result.
+ *
+ * Leaves unrelated hashes (e.g. #features, #how-it-works) untouched.
  *
  * @param {Location} [loc] - Location object (default: window.location)
  * @param {History} [hist] - History object (default: window.history)
- * @returns {{ roomCode: string, invitationToken: string } | null}
+ * @returns {{
+ *   isValid: boolean,
+ *   roomCode: string,
+ *   invitationToken: string | null,
+ *   error: string | null,
+ *   message: string,
+ *   urlCleared: boolean,
+ *   replaceStateError?: string | null,
+ * } | null}
  */
 export function parseAndClearLocationInvitation(
   loc = typeof window !== 'undefined' ? window.location : null,
@@ -156,22 +227,62 @@ export function parseAndClearLocationInvitation(
 ) {
   if (!loc || !loc.hash) return null;
 
-  const result = parseInvitation(loc.hash);
-  if (result.isValid && result.invitationToken) {
-    if (hist && typeof hist.replaceState === 'function') {
-      try {
-        const cleanUrl = (loc.pathname || '/') + (loc.search || '');
-        hist.replaceState(null, '', cleanUrl);
-      } catch {
-        // Ignore History API errors in restricted environments
-      }
+  // 1. Only process invitation-related fragments; leave unrelated hashes intact
+  if (!isInvitationFragment(loc.hash)) {
+    return null;
+  }
+
+  // 2. Always attempt history.replaceState to sanitize the address bar regardless of token validity
+  let urlCleared = false;
+  let replaceStateError = null;
+
+  if (hist && typeof hist.replaceState === 'function') {
+    try {
+      const cleanUrl = (loc.pathname || '/') + (loc.search || '');
+      hist.replaceState(null, '', cleanUrl);
+      urlCleared = true;
+    } catch (err) {
+      urlCleared = false;
+      replaceStateError = err ? err.message : 'replaceState failed';
     }
-    return {
-      roomCode: result.roomCode,
-      invitationToken: result.invitationToken,
+  }
+
+  // 3. Defensively parse the fragment without throwing on malformed percent-encoding
+  let parsed = null;
+  try {
+    parsed = parseInvitation(loc.hash);
+  } catch {
+    parsed = {
+      isValid: false,
+      roomCode: '',
+      invitationToken: null,
+      error: 'MALFORMED_INVITATION',
+      message: 'Invitation link could not be parsed.',
     };
   }
-  return null;
+
+  // 4. Return safe, non-secret-bearing result
+  if (parsed && parsed.isValid && parsed.invitationToken) {
+    return {
+      isValid: true,
+      roomCode: parsed.roomCode,
+      invitationToken: parsed.invitationToken,
+      error: null,
+      message: parsed.message,
+      urlCleared,
+      replaceStateError,
+    };
+  }
+
+  return {
+    isValid: false,
+    roomCode: (parsed && parsed.roomCode) || '',
+    invitationToken: null,
+    error: (parsed && parsed.error) || 'INVALID_INVITATION',
+    message: (parsed && parsed.message) || 'Invalid invitation link format.',
+    urlCleared,
+    replaceStateError,
+  };
 }
 
 /**
