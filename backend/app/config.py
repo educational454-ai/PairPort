@@ -1,17 +1,107 @@
-"""PairPort configuration settings.
-
-Loads settings from environment variables with sensible defaults for local development.
-"""
+from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 APP_NAME = "PairPort API"
 APP_ENV = os.getenv("PAIRPORT_ENV", "development")
 
-# CORS origin configuration
-_default_origins = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+# CORS and WebSocket origin configuration
+_default_origins = (
+    "http://localhost:5173,http://127.0.0.1:5173,"
+    "http://localhost:3000,http://127.0.0.1:3000,"
+    "http://localhost:4173,http://127.0.0.1:4173"
+)
 _env_origins = os.getenv("PAIRPORT_ALLOWED_ORIGINS") or os.getenv("PAIRPORT_FRONTEND_ORIGIN") or _default_origins
 ALLOWED_ORIGINS = [origin.strip() for origin in _env_origins.split(",") if origin.strip()]
+
+# WebSocket Origin validation policy
+# In production, an Origin header is strictly mandatory on all WebSocket connections.
+# In development, it is required by default unless explicitly disabled for headless tooling.
+WS_REQUIRE_ORIGIN = os.getenv("PAIRPORT_WS_REQUIRE_ORIGIN", "true").lower() in ("true", "1")
+
+
+def normalize_origin(raw_origin: str | None) -> str | None:
+    """Parse and normalize an HTTP/HTTPS origin into canonical 'scheme://host[:port]'.
+
+    Rejects missing, empty, 'null', non-HTTP schemes, invalid port formatting,
+    userinfo, paths, queries, and fragments.
+    """
+    if not raw_origin or not isinstance(raw_origin, str):
+        return None
+    cleaned = raw_origin.strip()
+    if not cleaned or cleaned.lower() == "null":
+        return None
+
+    try:
+        parsed = urlparse(cleaned)
+    except Exception:
+        return None
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return None
+
+    # Origin per RFC 6454 cannot have path beyond empty/slash, or queries/fragments/userinfo
+    if parsed.path not in ("", "/"):
+        return None
+    if parsed.query or parsed.fragment:
+        return None
+    if parsed.username or parsed.password:
+        return None
+
+    try:
+        hostname = parsed.hostname
+        port = parsed.port
+    except (ValueError, AttributeError):
+        # Invalid host/port formatting (e.g. 'http://localhost:5173.evil.com')
+        return None
+
+    if not hostname:
+        return None
+
+    hostname = hostname.lower()
+
+    if port is None or (scheme == "http" and port == 80) or (scheme == "https" and port == 443):
+        return f"{scheme}://{hostname}"
+    return f"{scheme}://{hostname}:{port}"
+
+
+def get_normalized_allowed_origins() -> set[str]:
+    """Return the set of normalized allowed origins, omitting wildcards."""
+    allowed: set[str] = set()
+    for origin in ALLOWED_ORIGINS:
+        if origin == "*":
+            continue
+        normalized = normalize_origin(origin)
+        if normalized:
+            allowed.add(normalized)
+    return allowed
+
+
+def is_origin_allowed(raw_origin: str | None) -> tuple[bool, str]:
+    """Validate incoming WebSocket Origin against configured ALLOWED_ORIGINS.
+
+    Returns (is_allowed, reason).
+    """
+    if raw_origin is None or not raw_origin.strip():
+        # Policy for missing Origin header:
+        # Browser WebSocket handshakes ALWAYS include an Origin header (RFC 6455).
+        # A missing Origin header is never silently trusted.
+        if WS_REQUIRE_ORIGIN or APP_ENV != "development":
+            return False, "Missing Origin header"
+        return True, "Allowed (development missing-origin override)"
+
+    normalized = normalize_origin(raw_origin)
+    if not normalized:
+        return False, "Malformed or invalid Origin header"
+
+    allowed_set = get_normalized_allowed_origins()
+    if normalized in allowed_set:
+        return True, "Origin allowed"
+
+    return False, "Origin not allowed"
+
 
 # Room lifecycle and limits
 ROOM_TTL_SECONDS = int(os.getenv("PAIRPORT_ROOM_TTL_SECONDS", "1800"))  # 30 minutes

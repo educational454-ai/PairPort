@@ -10,7 +10,7 @@ from app.services.room_manager import room_manager
 class TestWebRTCSignalingRelay(unittest.TestCase):
 
     def setUp(self) -> None:
-        self.client = TestClient(app)
+        self.client = TestClient(app, headers={"origin": "http://localhost:5173"})
         room_manager.rooms.clear()
 
     def test_offer_and_answer_relay(self) -> None:

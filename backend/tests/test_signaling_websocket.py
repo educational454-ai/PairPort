@@ -12,7 +12,7 @@ from app.services.room_manager import room_manager
 class TestWebSocketSignaling(unittest.TestCase):
 
     def setUp(self) -> None:
-        self.client = TestClient(app)
+        self.client = TestClient(app, headers={"origin": "http://localhost:5173"})
         # Reset in-memory rooms before each test
         room_manager.rooms.clear()
 
@@ -121,8 +121,8 @@ class TestWebSocketSignaling(unittest.TestCase):
 
     def test_peer_left_on_disconnect(self) -> None:
         """Verify peer-left notification is sent to remaining participant when peer disconnects."""
-        host_client = TestClient(app)
-        guest_client = TestClient(app)
+        host_client = TestClient(app, headers={"origin": "http://localhost:5173"})
+        guest_client = TestClient(app, headers={"origin": "http://localhost:5173"})
         with host_client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
             room_code = host_ws.receive_json()["payload"]["room_code"]

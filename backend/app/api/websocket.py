@@ -23,6 +23,7 @@ from app.config import (
     WS_ACTION_LIMIT_ROOM_OPS,
     WS_RATE_LIMIT_BURST,
     WS_RATE_LIMIT_PER_SEC,
+    is_origin_allowed,
 )
 from app.services.room_manager import (
     DuplicateConnectionError,
@@ -212,6 +213,22 @@ async def websocket_signaling_endpoint(
       - {"type": "error", "payload": {"code": "...", "message": "..."}}
       - {"type": "pong", "payload": {...}}
     """
+    # ----------------------------------------------------
+    # Security (SEC-01): Validate WebSocket Origin before accept()
+    # ----------------------------------------------------
+    raw_origin = websocket.headers.get("origin")
+    is_allowed, reason = is_origin_allowed(raw_origin)
+    if not is_allowed:
+        logger.warning(
+            "WebSocket rejected: %s (origin=%r, path=%s, client=%s)",
+            reason,
+            raw_origin,
+            websocket.url.path,
+            websocket.client.host if websocket.client else "unknown",
+        )
+        await websocket.close(code=1008, reason=reason)
+        return
+
     await websocket.accept()
 
     current_room_code: str | None = None
