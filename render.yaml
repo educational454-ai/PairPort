@@ -29,8 +29,9 @@ services:
   # ----------------------------------------------------------------------------
   # Frontend Static Site: Vite Single Page Web App
   # ----------------------------------------------------------------------------
-  - type: static
+  - type: web
     name: pairport-frontend
+    runtime: static
     rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
