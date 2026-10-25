@@ -56,7 +56,7 @@ class TestHostRoleTakeoverAndReconnectManager(unittest.IsolatedAsyncioTestCase):
     """Unit tests on RoomManager focusing on host authorization and reconnect mechanics."""
 
     async def asyncSetUp(self) -> None:
-        self.manager = RoomManager()
+        self.manager = RoomManager(require_invitation_token=True)
 
     async def test_normal_room_creation_and_guest_admission(self) -> None:
         """Legitimate host creates room and guest joins with invitation token; both get tokens."""

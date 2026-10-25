@@ -21,6 +21,7 @@ from app.config import (
     MAX_PARTICIPANTS_PER_ROOM,
     RECONNECT_GRACE_PERIOD_SECONDS,
     RECONNECT_TOKEN_BYTES,
+    REQUIRE_INVITATION_TOKEN,
     ROOM_CODE_LENGTH,
     ROOM_CODE_PREFIX,
     ROOM_TTL_SECONDS,
@@ -253,10 +254,12 @@ class RoomManager:
         self,
         default_ttl: float = ROOM_TTL_SECONDS,
         grace_period: float = RECONNECT_GRACE_PERIOD_SECONDS,
+        require_invitation_token: bool = REQUIRE_INVITATION_TOKEN,
     ) -> None:
         self.rooms: dict[str, Room] = {}
         self.default_ttl = default_ttl
         self.grace_period = grace_period
+        self.require_invitation_token = require_invitation_token
         self._lock = asyncio.Lock()
 
     async def create_room(self, ttl: float | None = None, now: float | None = None) -> Room:
@@ -359,19 +362,20 @@ class RoomManager:
                 assigned_role = "guest"
 
             if assigned_role == "guest":
-                is_valid, reason = room.is_invitation_valid(invitation_token, now=current_time)
-                if not is_valid:
-                    if reason == "INVITATION_REQUIRED":
-                        raise InvitationRequiredError("Invitation token is required to join as guest.")
-                    elif reason == "INVITATION_ALREADY_USED":
-                        raise InvitationAlreadyUsedError("Invitation token has already been consumed.")
-                    elif reason == "INVITATION_EXPIRED":
-                        raise InvitationExpiredError("Invitation token has expired.")
-                    else:
-                        raise InvalidInvitationError("Invalid invitation token.")
+                if invitation_token and str(invitation_token).strip():
+                    is_valid, reason = room.is_invitation_valid(invitation_token, now=current_time)
+                    if not is_valid:
+                        if reason == "INVITATION_ALREADY_USED":
+                            raise InvitationAlreadyUsedError("Invitation token has already been consumed.")
+                        elif reason == "INVITATION_EXPIRED":
+                            raise InvitationExpiredError("Invitation token has expired.")
+                        else:
+                            raise InvalidInvitationError("Invalid invitation token.")
 
-                # Consume token atomically with slot assignment
-                room.invitation_consumed = True
+                    # Consume token atomically with slot assignment
+                    room.invitation_consumed = True
+                elif self.require_invitation_token:
+                    raise InvitationRequiredError("Invitation token is required to join as guest.")
 
             session_id = uuid.uuid4().hex
             reconnect_token = secrets.token_urlsafe(RECONNECT_TOKEN_BYTES)

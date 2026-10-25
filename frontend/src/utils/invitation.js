@@ -155,12 +155,21 @@ export function parseInvitation(input) {
 
   if (room && !token) {
     const roomValidation = validateRoomCode(room.trim().toUpperCase());
+    if (roomValidation.isValid) {
+      return {
+        isValid: true,
+        roomCode: roomValidation.code,
+        invitationToken: null,
+        error: null,
+        message: 'Valid room code.',
+      };
+    }
     return {
       isValid: false,
-      roomCode: roomValidation.isValid ? roomValidation.code : room,
+      roomCode: room,
       invitationToken: null,
-      error: 'INVITATION_REQUIRED',
-      message: 'An invitation token or valid invite link is required to join this room.',
+      error: roomValidation.error,
+      message: roomValidation.message,
     };
   }
 
@@ -178,11 +187,11 @@ export function parseInvitation(input) {
   const plainValidation = validateRoomCode(raw);
   if (plainValidation.isValid) {
     return {
-      isValid: false,
+      isValid: true,
       roomCode: plainValidation.code,
       invitationToken: null,
-      error: 'INVITATION_REQUIRED',
-      message: 'An invitation token or valid invite link is required to join this room.',
+      error: null,
+      message: 'Valid room code.',
     };
   }
 
@@ -316,12 +325,12 @@ export function parseAndClearLocationInvitation(
   }
 
   // 3. Return safe, non-secret-bearing result
-  if (parsed && parsed.isValid && parsed.invitationToken) {
+  if (parsed && parsed.isValid) {
     return {
       isValid: true,
       hasFragment: true,
       roomCode: parsed.roomCode,
-      invitationToken: parsed.invitationToken,
+      invitationToken: parsed.invitationToken || null,
       error: null,
       message: parsed.message,
       urlCleared,

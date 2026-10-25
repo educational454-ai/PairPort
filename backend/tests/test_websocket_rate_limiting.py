@@ -194,46 +194,47 @@ class TestWebSocketRateLimiting(unittest.TestCase):
 
     def test_invalid_and_missing_invitation_tokens_consume_capacity(self) -> None:
         """Verify malformed, missing, and non-existent room join attempts consume budget."""
-        with self.client.websocket_connect("/ws") as host_ws:
-            host_ws.send_json({"type": "create"})
-            created = host_ws.receive_json()
-            room_code = created["payload"]["room_code"]
-            token = created["payload"]["invitation_token"]
-            _ = host_ws.receive_json()  # waiting
+        with patch.object(room_manager, "require_invitation_token", True):
+            with self.client.websocket_connect("/ws") as host_ws:
+                host_ws.send_json({"type": "create"})
+                created = host_ws.receive_json()
+                room_code = created["payload"]["room_code"]
+                token = created["payload"]["invitation_token"]
+                _ = host_ws.receive_json()  # waiting
 
-            with self.client.websocket_connect("/ws") as guest_ws:
-                # 1. Missing room_code
-                guest_ws.send_json({"type": "join", "payload": {}})
-                err = guest_ws.receive_json()
-                self.assertEqual(err["payload"]["code"], "MISSING_ROOM_CODE")
+                with self.client.websocket_connect("/ws") as guest_ws:
+                    # 1. Missing room_code
+                    guest_ws.send_json({"type": "join", "payload": {}})
+                    err = guest_ws.receive_json()
+                    self.assertEqual(err["payload"]["code"], "MISSING_ROOM_CODE")
 
-                # 2. Non-existent room
-                guest_ws.send_json({"type": "join", "payload": {"room_code": "PORT-999999"}})
-                err = guest_ws.receive_json()
-                self.assertEqual(err["payload"]["code"], "ROOM_NOT_FOUND")
+                    # 2. Non-existent room
+                    guest_ws.send_json({"type": "join", "payload": {"room_code": "PORT-999999"}})
+                    err = guest_ws.receive_json()
+                    self.assertEqual(err["payload"]["code"], "ROOM_NOT_FOUND")
 
-                # 3. Missing invitation token
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
-                err = guest_ws.receive_json()
-                self.assertEqual(err["payload"]["code"], "INVITATION_REQUIRED")
+                    # 3. Missing invitation token
+                    guest_ws.send_json({"type": "join", "payload": {"room_code": room_code}})
+                    err = guest_ws.receive_json()
+                    self.assertEqual(err["payload"]["code"], "INVITATION_REQUIRED")
 
-                # 4. Wrong invitation token
-                guest_ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": "wrong"}})
-                err = guest_ws.receive_json()
-                self.assertEqual(err["payload"]["code"], "INVALID_INVITATION")
+                    # 4. Wrong invitation token
+                    guest_ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": "wrong"}})
+                    err = guest_ws.receive_json()
+                    self.assertEqual(err["payload"]["code"], "INVALID_INVITATION")
 
-            # That consumed 4 attempts. Now exhaust remaining (WS_RATE_LIMIT_JOIN_PER_MIN - 4) attempts
-            remaining = WS_RATE_LIMIT_JOIN_PER_MIN - 4
-            for _ in range(remaining):
+                # That consumed 4 attempts. Now exhaust remaining (WS_RATE_LIMIT_JOIN_PER_MIN - 4) attempts
+                remaining = WS_RATE_LIMIT_JOIN_PER_MIN - 4
+                for _ in range(remaining):
+                    with self.client.websocket_connect("/ws") as ws:
+                        ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": "bad"}})
+                        _ = ws.receive_json()
+
+                # Next attempt must be throttled
                 with self.client.websocket_connect("/ws") as ws:
-                    ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": "bad"}})
-                    _ = ws.receive_json()
-
-            # Next attempt must be throttled
-            with self.client.websocket_connect("/ws") as ws:
-                ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": token}})
-                err = ws.receive_json()
-                self.assertEqual(err["payload"]["code"], "RATE_LIMITED")
+                    ws.send_json({"type": "join", "payload": {"room_code": room_code, "invitation_token": token}})
+                    err = ws.receive_json()
+                    self.assertEqual(err["payload"]["code"], "RATE_LIMITED")
 
     def test_valid_invitation_usable_after_earlier_invalid_attempt_if_budget_remains(self) -> None:
         """Verify a user who makes a typo in their token can still join if budget remains."""

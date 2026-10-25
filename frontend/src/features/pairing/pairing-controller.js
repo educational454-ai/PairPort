@@ -282,24 +282,13 @@ export function initPairing(
         return;
       }
 
-      const token = state.invitationToken;
-      const boundRoom = state.invitationRoomCode;
-      if (!token || !boundRoom || boundRoom !== result.code) {
-        state.invitationToken = null;
-        state.invitationRoomCode = null;
-        signaling.invitationToken = null;
-        signaling.invitationRoomCode = null;
-        setFeedback(
-          feedbackEl,
-          'An authorized invitation link or token is required to join this room.',
-          'error',
-        );
-        toast('Invitation required: Please use the invitation link provided by the host.', 'error', 4000);
-        roomCodeInput.focus();
-        return;
-      }
+      // If user has a verified invitation token for THIS room, send it.
+      // Otherwise, join with the room code alone.
+      const token = (state.invitationToken && state.invitationRoomCode === result.code)
+        ? state.invitationToken
+        : null;
 
-      setFeedback(feedbackEl, `Attempting to join room "${result.code}" with invitation...`, 'warning');
+      setFeedback(feedbackEl, `Attempting to join room "${result.code}"...`, 'warning');
       signaling.joinRoom(result.code, token);
     });
   }

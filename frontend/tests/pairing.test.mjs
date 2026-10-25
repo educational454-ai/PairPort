@@ -240,17 +240,17 @@ describe('5. initPairing and setPairingFeedback', () => {
     createHandler();
     assert.equal(created, true);
 
-    // Trigger join form submit WITHOUT token: must NOT call joinRoom
+    // Trigger join form submit WITHOUT token: allows joinRoom with room code and null token
     submitHandler({ preventDefault: () => {} });
-    assert.equal(joinedCode, null, 'Must reject room-code-only join when token is missing');
+    assert.equal(joinedCode, 'PORT-XYZ9', 'Allows room-code join when token is missing');
+    assert.equal(joinedToken, null);
 
-    // Trigger join form submit WITH token bound to a DIFFERENT room: must reject and clear token
+    // Trigger join form submit WITH token bound to a DIFFERENT room: joins without sending mismatched token
     state.invitationToken = 'test-token-1234567890abcdef';
     state.invitationRoomCode = 'PORT-DIFFERENT';
     submitHandler({ preventDefault: () => {} });
-    assert.equal(joinedCode, null, 'Must reject join when room binding mismatches');
-    assert.equal(state.invitationToken, null, 'Must invalidate mismatched token');
-    assert.equal(state.invitationRoomCode, null);
+    assert.equal(joinedCode, 'PORT-XYZ9');
+    assert.equal(joinedToken, null, 'Does not pass mismatched token');
 
     // Trigger join form submit WITH authorized token bound to matching room: must call joinRoom with code and token
     state.invitationToken = 'test-token-1234567890abcdef';

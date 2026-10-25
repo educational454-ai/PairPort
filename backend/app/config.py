@@ -132,6 +132,7 @@ WS_RATE_LIMIT_WINDOW_SECONDS = float(os.getenv("PAIRPORT_WS_LIMIT_WINDOW_SECONDS
 # Guest Invitation Security (Step 9F)
 INVITATION_TOKEN_BYTES = int(os.getenv("PAIRPORT_INVITATION_TOKEN_BYTES", "16"))  # 128-bit CSPRNG entropy
 INVITATION_TTL_SECONDS = int(os.getenv("PAIRPORT_INVITATION_TTL_SECONDS", "1800"))  # Bound to room TTL
+REQUIRE_INVITATION_TOKEN = os.getenv("PAIRPORT_REQUIRE_INVITATION_TOKEN", "false").lower() in ("true", "1")
 
 # Participant Reconnection Protocol (Step 9J-1)
 RECONNECT_GRACE_PERIOD_SECONDS = float(os.getenv("PAIRPORT_RECONNECT_GRACE_PERIOD_SECONDS", "30.0"))

@@ -19,6 +19,7 @@ import json
 import secrets
 import time
 import unittest
+from unittest.mock import patch
 from starlette.testclient import TestClient
 
 from app.config import (
@@ -47,7 +48,7 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
     """Unit and concurrency tests for backend RoomManager invitation handling."""
 
     async def asyncSetUp(self) -> None:
-        self.manager = RoomManager(default_ttl=ROOM_TTL_SECONDS)
+        self.manager = RoomManager(default_ttl=ROOM_TTL_SECONDS, require_invitation_token=True)
 
     async def test_invitation_generation_and_entropy(self) -> None:
         """Verify invitation token is generated with at least 128 bits of CSPRNG entropy."""
@@ -107,6 +108,20 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
         # Room state remains intact: 1 participant, invitation not consumed
         self.assertEqual(len(room.participants), 1)
         self.assertFalse(room.invitation_consumed)
+
+    async def test_room_code_only_guest_join_allowed_by_default(self) -> None:
+        """Verify guest can join with room code alone when require_invitation_token=False."""
+        code_manager = RoomManager(require_invitation_token=False)
+        room = await code_manager.create_room()
+        await code_manager.join_room(room.code, object(), role="host")
+
+        # Guest joins with code alone (invitation_token=None)
+        room, guest_p, guest_token = await code_manager.join_room(
+            room.code, object(), invitation_token=None, role="guest"
+        )
+        self.assertEqual(guest_p.role, "guest")
+        self.assertEqual(len(room.participants), 2)
+        self.assertTrue(room.is_full())
 
     async def test_invalid_invitation_token_rejected(self) -> None:
         """Verify bogus invitation token is rejected without consuming or slot assignment."""
@@ -286,7 +301,26 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
                 self.assertEqual(host_event["payload"]["role"], "host")
 
     def test_guest_join_without_invitation_rejected_with_invitation_required(self) -> None:
-        """Verify room-code-only guest join over /ws is rejected."""
+        """Verify room-code-only guest join over /ws is rejected when require_invitation_token=True."""
+        with patch.object(room_manager, "require_invitation_token", True):
+            with self.client.websocket_connect("/ws") as host_ws:
+                host_ws.send_json({"type": "create"})
+                room_code = host_ws.receive_json()["payload"]["room_code"]
+                _ = host_ws.receive_json()  # waiting
+
+                with self.client.websocket_connect("/ws") as guest_ws:
+                    guest_ws.send_json({
+                        "type": "join",
+                        "payload": {"room_code": room_code},  # No invitation_token!
+                    })
+
+                    err_event = guest_ws.receive_json()
+                    self.assertEqual(err_event["type"], "error")
+                    self.assertEqual(err_event["payload"]["code"], "INVITATION_REQUIRED")
+                    self.assertIn("invitation token is required", err_event["payload"]["message"].lower())
+
+    def test_guest_join_with_room_code_alone_succeeds_by_default(self) -> None:
+        """Verify guest can join with room code alone over /ws by default."""
         with self.client.websocket_connect("/ws") as host_ws:
             host_ws.send_json({"type": "create"})
             room_code = host_ws.receive_json()["payload"]["room_code"]
@@ -298,10 +332,10 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
                     "payload": {"room_code": room_code},  # No invitation_token!
                 })
 
-                err_event = guest_ws.receive_json()
-                self.assertEqual(err_event["type"], "error")
-                self.assertEqual(err_event["payload"]["code"], "INVITATION_REQUIRED")
-                self.assertIn("invitation token is required", err_event["payload"]["message"].lower())
+                guest_event = guest_ws.receive_json()
+                self.assertEqual(guest_event["type"], "peer-joined")
+                self.assertEqual(guest_event["payload"]["room_code"], room_code)
+                self.assertEqual(guest_event["payload"]["role"], "guest")
 
     def test_guest_join_with_invalid_invitation_rejected(self) -> None:
         """Verify guest join with invalid invitation is rejected with INVALID_INVITATION."""

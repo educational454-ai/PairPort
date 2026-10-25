@@ -122,7 +122,7 @@ export class SignalingClient {
   }
 
   /** Connect to WebSocket and join an existing room as guest with invitation token */
-  joinRoom(rawCode, invitationToken) {
+  joinRoom(rawCode, invitationToken = null) {
     if (this.state === SIGNALING_STATES.CREATING || this.state === SIGNALING_STATES.JOINING) {
       return;
     }
@@ -133,19 +133,7 @@ export class SignalingClient {
       return;
     }
 
-    if (!invitationToken || typeof invitationToken !== 'string' || !invitationToken.trim()) {
-      this.setState(SIGNALING_STATES.ERROR, {
-        code: 'INVITATION_REQUIRED',
-        message: 'An invitation token or valid invite link is required to join this room.',
-      });
-      this.emit('error', {
-        code: 'INVITATION_REQUIRED',
-        message: 'An invitation token or valid invite link is required to join this room.',
-      });
-      return;
-    }
-
-    const token = invitationToken.trim();
+    const token = (invitationToken && typeof invitationToken === 'string') ? invitationToken.trim() : null;
     this.leaveRoom();
     this.isExplicitLeave = false;
     this._cancelReconnect();
@@ -164,7 +152,11 @@ export class SignalingClient {
     this.setState(SIGNALING_STATES.JOINING);
 
     this._connect((ws) => {
-      this._send(ws, 'join', { room_code: code, invitation_token: token });
+      const payload = { room_code: code };
+      if (token) {
+        payload.invitation_token = token;
+      }
+      this._send(ws, 'join', payload);
     });
   }
 

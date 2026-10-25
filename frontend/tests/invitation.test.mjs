@@ -58,14 +58,13 @@ describe('2. parseInvitation', () => {
     assert.equal(parsed.error, null);
   });
 
-  it('rejects plain room code when token is missing with INVITATION_REQUIRED', () => {
+  it('parses plain room code with null token', () => {
     const raw = 'PORT-7K2M9X';
     const parsed = parseInvitation(raw);
-    assert.equal(parsed.isValid, false);
+    assert.equal(parsed.isValid, true);
     assert.equal(parsed.roomCode, 'PORT-7K2M9X');
     assert.equal(parsed.invitationToken, null);
-    assert.equal(parsed.error, 'INVITATION_REQUIRED');
-    assert.ok(parsed.message.includes('invitation token'));
+    assert.equal(parsed.error, null);
   });
 
   it('rejects malformed token (too short or invalid chars) with INVALID_TOKEN_FORMAT', () => {
@@ -340,18 +339,27 @@ describe('5. SignalingClient Invitation Flow & Authorization Protocol', () => {
     assert.equal(client.state, SIGNALING_STATES.IDLE);
   });
 
-  it('refuses to join without an invitation token (no room-code-only fallback)', () => {
-    let errorEvent = null;
-    client.on('error', (err) => {
-      errorEvent = err;
-    });
-
-    client.joinRoom('PORT-7K2M9X', null);
-
-    assert.equal(client.state, SIGNALING_STATES.ERROR);
-    assert.ok(errorEvent);
-    assert.equal(errorEvent.code, 'INVITATION_REQUIRED');
-    assert.equal(client.ws, null, 'Must NOT open WebSocket connection without token');
+  it('allows joinRoom without token for simple code joining', () => {
+    const origWs = globalThis.WebSocket;
+    class MockWebSocket {
+      constructor() {
+        this.readyState = 1;
+        queueMicrotask(() => {
+          if (typeof this.onopen === 'function') this.onopen();
+        });
+      }
+      send() {}
+      close() {}
+    }
+    globalThis.WebSocket = MockWebSocket;
+    try {
+      client.joinRoom('PORT-7K2M9X', null);
+      assert.equal(client.invitationToken, null);
+      assert.equal(client.invitationRoomCode, 'PORT-7K2M9X');
+      assert.equal(client.state, SIGNALING_STATES.JOINING);
+    } finally {
+      globalThis.WebSocket = origWs;
+    }
   });
 
   it('sends invitation_token in join payload and never in WS query params', async () => {
@@ -649,15 +657,17 @@ describe('7. Cross-Device & Mobile Browser Location Invitation Handling (Regress
     assert.equal(prefixFragRes.roomCode, 'PORT-445566');
     assert.equal(prefixFragRes.invitationToken, '0123456789abcdef0123456789abcdef');
 
-    // 4. Missing token in query
+    // 4. Missing token in query is a valid room code without token
     const missingRes = parseInvitation('https://pairport.app/?room=PORT-445566');
-    assert.equal(missingRes.isValid, false);
-    assert.equal(missingRes.error, 'INVITATION_REQUIRED');
+    assert.equal(missingRes.isValid, true);
+    assert.equal(missingRes.roomCode, 'PORT-445566');
+    assert.equal(missingRes.invitationToken, null);
 
-    // 5. Normal room code alone must be rejected
+    // 5. Normal room code alone is valid
     const plainRes = parseInvitation('PORT-445566');
-    assert.equal(plainRes.isValid, false);
-    assert.equal(plainRes.error, 'INVITATION_REQUIRED');
+    assert.equal(plainRes.isValid, true);
+    assert.equal(plainRes.roomCode, 'PORT-445566');
+    assert.equal(plainRes.invitationToken, null);
   });
 
   it('end-to-end: guest opening invitation on fresh device loads token and successfully submits join', () => {
@@ -729,10 +739,14 @@ describe('7. Cross-Device & Mobile Browser Location Invitation Handling (Regress
     assert.equal(joinedToken, '0123456789abcdef0123456789abcdef');
   });
 
-  it('end-to-end: guest submitting room code alone without token is rejected', () => {
+  it('end-to-end: guest submitting room code alone without token succeeds in sending join', () => {
     let joinedCode = null;
+    let joinedToken = undefined;
     const mockSignaling = {
-      joinRoom: (code) => { joinedCode = code; },
+      joinRoom: (code, token) => {
+        joinedCode = code;
+        joinedToken = token;
+      },
       createRoom: () => {},
       invitationToken: null,
       invitationRoomCode: null,
@@ -783,7 +797,8 @@ describe('7. Cross-Device & Mobile Browser Location Invitation Handling (Regress
 
     submitHandler({ preventDefault: () => {} });
 
-    assert.equal(joinedCode, null, 'signaling.joinRoom must NOT be called without token');
-    assert.equal(feedbackText, 'An authorized invitation link or token is required to join this room.');
+    assert.equal(joinedCode, 'PORT-63TAWW', 'signaling.joinRoom must be called with room code');
+    assert.equal(joinedToken, null, 'signaling.joinRoom must be called with null token for simple code join');
+    assert.ok(feedbackText.includes('Attempting to join room "PORT-63TAWW"'));
   });
 });
