@@ -11,6 +11,7 @@ import {
 import { SignalingClient, SIGNALING_STATES } from '../src/services/signaling.js';
 import { createInitialState, resetSessionState, state } from '../src/state/app-state.js';
 import { initConnectionController } from '../src/features/connection/connection-controller.js';
+import { initPairing } from '../src/features/pairing/pairing-controller.js';
 
 describe('1. createInvitationUrl', () => {
   it('creates shareable URL containing room code and token in the URL fragment (#)', () => {
@@ -548,5 +549,241 @@ describe('7. Connection Controller Join Error Cleanup & Race Guards', () => {
     assert.equal(state.invitationRoomCode, null);
     assert.equal(testClient.invitationToken, null);
     assert.equal(testClient.invitationRoomCode, null);
+  });
+});
+
+describe('7. Cross-Device & Mobile Browser Location Invitation Handling (Regression)', () => {
+  class SimulatedBrowserLocation {
+    constructor(url) {
+      this._url = new URL(url);
+    }
+    get hash() { return this._url.hash; }
+    set hash(v) { this._url.hash = v; }
+    get search() { return this._url.search; }
+    set search(v) { this._url.search = v; }
+    get pathname() { return this._url.pathname; }
+    get href() { return this._url.href; }
+  }
+
+  class SimulatedBrowserHistory {
+    constructor(loc) {
+      this._loc = loc;
+      this.lastReplacedUrl = null;
+    }
+    replaceState(state, title, url) {
+      this.lastReplacedUrl = url;
+      // In real browsers, replaceState dynamically updates window.location.href, hash, and search!
+      this._loc._url = new URL(url, this._loc.href);
+    }
+  }
+
+  it('correctly extracts invitation in a real browser where replaceState mutates location.hash', () => {
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/#join?room=PORT-63TAWW&token=0123456789abcdef0123456789abcdef');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    const result = parseAndClearLocationInvitation(loc, hist);
+    assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.roomCode, 'PORT-63TAWW');
+    assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
+    assert.equal(result.urlCleared, true);
+    // Address bar must be sanitized and hash cleared
+    assert.equal(loc.hash, '');
+    assert.equal(loc.pathname, '/');
+  });
+
+  it('correctly extracts invitation from URL query parameters (e.g. mobile link sharing)', () => {
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/?room=PORT-63TAWW&token=0123456789abcdef0123456789abcdef');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    const result = parseAndClearLocationInvitation(loc, hist);
+    assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.roomCode, 'PORT-63TAWW');
+    assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
+    assert.equal(result.urlCleared, true);
+    // Sensitive token must be stripped from query parameters in address bar
+    assert.equal(loc.search, '');
+  });
+
+  it('correctly extracts invitation from URL query parameters followed by router hash', () => {
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/?room=PORT-63TAWW&token=0123456789abcdef0123456789abcdef#/pair');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    const result = parseAndClearLocationInvitation(loc, hist);
+    assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.roomCode, 'PORT-63TAWW');
+    assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
+    assert.equal(result.urlCleared, true);
+    assert.equal(loc.search, '');
+  });
+
+  it('correctly extracts invitation from fragment with leading slash (#/join?...)', () => {
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/#/join?room=PORT-63TAWW&token=0123456789abcdef0123456789abcdef');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    const result = parseAndClearLocationInvitation(loc, hist);
+    assert.ok(result);
+    assert.equal(result.isValid, true);
+    assert.equal(result.roomCode, 'PORT-63TAWW');
+    assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
+  });
+
+  it('parses diverse supported formats via parseInvitation', () => {
+    // 1. Alias query parameter names: code and invitation_token
+    const aliasRes = parseInvitation('https://pairport.app/?code=PORT-445566&invitation_token=0123456789abcdef0123456789abcdef');
+    assert.equal(aliasRes.isValid, true);
+    assert.equal(aliasRes.roomCode, 'PORT-445566');
+    assert.equal(aliasRes.invitationToken, '0123456789abcdef0123456789abcdef');
+
+    // 2. Prefix room code with token query
+    const prefixRes = parseInvitation('PORT-445566?token=0123456789abcdef0123456789abcdef');
+    assert.equal(prefixRes.isValid, true);
+    assert.equal(prefixRes.roomCode, 'PORT-445566');
+    assert.equal(prefixRes.invitationToken, '0123456789abcdef0123456789abcdef');
+
+    // 3. Prefix room code with token fragment
+    const prefixFragRes = parseInvitation('PORT-445566#token=0123456789abcdef0123456789abcdef');
+    assert.equal(prefixFragRes.isValid, true);
+    assert.equal(prefixFragRes.roomCode, 'PORT-445566');
+    assert.equal(prefixFragRes.invitationToken, '0123456789abcdef0123456789abcdef');
+
+    // 4. Missing token in query
+    const missingRes = parseInvitation('https://pairport.app/?room=PORT-445566');
+    assert.equal(missingRes.isValid, false);
+    assert.equal(missingRes.error, 'INVITATION_REQUIRED');
+
+    // 5. Normal room code alone must be rejected
+    const plainRes = parseInvitation('PORT-445566');
+    assert.equal(plainRes.isValid, false);
+    assert.equal(plainRes.error, 'INVITATION_REQUIRED');
+  });
+
+  it('end-to-end: guest opening invitation on fresh device loads token and successfully submits join', () => {
+    let joinedCode = null;
+    let joinedToken = null;
+    const mockSignaling = {
+      joinRoom: (code, token) => {
+        joinedCode = code;
+        joinedToken = token;
+      },
+      createRoom: () => {},
+      invitationToken: null,
+      invitationRoomCode: null,
+    };
+
+    let feedbackText = '';
+    let feedbackClass = '';
+    const fakeFeedback = {
+      set textContent(v) { feedbackText = v; },
+      get textContent() { return feedbackText; },
+      set className(v) { feedbackClass = v; },
+      get className() { return feedbackClass; },
+    };
+
+    let submitHandler = null;
+    const fakeInput = { value: '', focus: () => {}, addEventListener: () => {} };
+    const fakeForm = {
+      addEventListener: (evt, handler) => {
+        if (evt === 'submit') submitHandler = handler;
+      },
+    };
+
+    const fakeSection = {
+      dataset: {},
+      querySelector: (sel) => {
+        if (sel === '#room-code-input') return fakeInput;
+        if (sel === '#join-code-feedback') return fakeFeedback;
+        if (sel === '#join-room-form') return fakeForm;
+        return null;
+      },
+    };
+    const fakeRoot = {
+      querySelector: (sel) => (sel === '#pairing' ? fakeSection : null),
+    };
+
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/#join?room=PORT-63TAWW&token=0123456789abcdef0123456789abcdef');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    // Initial load on guest browser
+    const initRes = initPairing(fakeRoot, {
+      signaling: mockSignaling,
+      location: loc,
+      history: hist,
+      toast: () => {},
+    });
+
+    assert.ok(initRes.locationInvite);
+    assert.equal(initRes.locationInvite.isValid, true);
+    assert.equal(fakeInput.value, 'PORT-63TAWW');
+    assert.equal(state.invitationToken, '0123456789abcdef0123456789abcdef');
+    assert.equal(state.invitationRoomCode, 'PORT-63TAWW');
+    assert.ok(feedbackClass.includes('feedback-success'));
+
+    // Guest submits form
+    assert.ok(submitHandler, 'Join form submit listener must be wired');
+    submitHandler({ preventDefault: () => {} });
+
+    assert.equal(joinedCode, 'PORT-63TAWW');
+    assert.equal(joinedToken, '0123456789abcdef0123456789abcdef');
+  });
+
+  it('end-to-end: guest submitting room code alone without token is rejected', () => {
+    let joinedCode = null;
+    const mockSignaling = {
+      joinRoom: (code) => { joinedCode = code; },
+      createRoom: () => {},
+      invitationToken: null,
+      invitationRoomCode: null,
+    };
+
+    let feedbackText = '';
+    const fakeFeedback = {
+      set textContent(v) { feedbackText = v; },
+      get textContent() { return feedbackText; },
+      set className(v) {},
+      get className() { return ''; },
+    };
+
+    let submitHandler = null;
+    const fakeInput = { value: 'PORT-63TAWW', focus: () => {}, addEventListener: () => {} };
+    const fakeForm = {
+      addEventListener: (evt, handler) => {
+        if (evt === 'submit') submitHandler = handler;
+      },
+    };
+
+    const fakeSection = {
+      dataset: {},
+      querySelector: (sel) => {
+        if (sel === '#room-code-input') return fakeInput;
+        if (sel === '#join-code-feedback') return fakeFeedback;
+        if (sel === '#join-room-form') return fakeForm;
+        return null;
+      },
+    };
+    const fakeRoot = {
+      querySelector: (sel) => (sel === '#pairing' ? fakeSection : null),
+    };
+
+    // Fresh load without invitation in URL
+    const loc = new SimulatedBrowserLocation('https://pairport-frontend.onrender.com/#/pair');
+    const hist = new SimulatedBrowserHistory(loc);
+
+    state.invitationToken = null;
+    state.invitationRoomCode = null;
+
+    initPairing(fakeRoot, {
+      signaling: mockSignaling,
+      location: loc,
+      history: hist,
+      toast: () => {},
+    });
+
+    submitHandler({ preventDefault: () => {} });
+
+    assert.equal(joinedCode, null, 'signaling.joinRoom must NOT be called without token');
+    assert.equal(feedbackText, 'An authorized invitation link or token is required to join this room.');
   });
 });

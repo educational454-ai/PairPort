@@ -62,100 +62,116 @@ export function parseInvitation(input) {
   }
 
   const raw = input.trim();
-  let queryString = '';
+  let room = null;
+  let token = null;
+
+  // Separate hash fragment and pre-hash URL/query
+  const hashIndex = raw.indexOf('#');
+  const beforeHash = hashIndex !== -1 ? raw.slice(0, hashIndex) : raw;
+  const fragment = hashIndex !== -1 ? raw.slice(hashIndex + 1) : '';
 
   // Extract query string from fragment if present
-  const hashIndex = raw.indexOf('#');
-  if (hashIndex !== -1) {
-    const fragment = raw.slice(hashIndex + 1);
+  let fragmentQuery = '';
+  if (fragment) {
     const qIndex = fragment.indexOf('?');
-    queryString = qIndex !== -1 ? fragment.slice(qIndex + 1) : fragment;
-  } else if (raw.includes('?')) {
-    queryString = raw.slice(raw.indexOf('?') + 1);
-  } else if (raw.includes('=')) {
-    queryString = raw;
+    fragmentQuery = qIndex !== -1 ? fragment.slice(qIndex + 1) : (fragment.includes('=') ? fragment : '');
   }
 
-  if (queryString) {
+  // Extract query string from pre-hash part if present
+  let searchQuery = '';
+  const searchIndex = beforeHash.indexOf('?');
+  if (searchIndex !== -1) {
+    searchQuery = beforeHash.slice(searchIndex + 1);
+  } else if (!fragment && raw.includes('=')) {
+    searchQuery = raw;
+  }
+
+  // Parse parameters from fragment query first, then search query
+  if (fragmentQuery) {
     try {
-      const params = new URLSearchParams(queryString);
-      let room = null;
-      let token = null;
-      try {
+      const params = new URLSearchParams(fragmentQuery);
+      room = params.get('room') || params.get('code') || params.get('room_code');
+      token = params.get('token') || params.get('invitation_token') || params.get('invite');
+    } catch {}
+  }
+
+  if (searchQuery) {
+    try {
+      const params = new URLSearchParams(searchQuery);
+      if (!room) {
         room = params.get('room') || params.get('code') || params.get('room_code');
-      } catch {
-        room = null;
       }
-      try {
+      if (!token) {
         token = params.get('token') || params.get('invitation_token') || params.get('invite');
-      } catch {
-        token = null;
       }
+    } catch {}
+  }
 
-      if (room && token) {
-        room = room.trim().toUpperCase();
-        token = token.trim();
-
-        const roomValidation = validateRoomCode(room);
-        if (!roomValidation.isValid) {
-          return {
-            isValid: false,
-            roomCode: room,
-            invitationToken: null,
-            error: roomValidation.error,
-            message: roomValidation.message,
-          };
-        }
-
-        // Token must be at least 16 characters and contain only base64url characters
-        if (token.length < 16 || !/^[A-Za-z0-9_-]+$/.test(token)) {
-          return {
-            isValid: false,
-            roomCode: roomValidation.code,
-            invitationToken: null,
-            error: 'INVALID_TOKEN_FORMAT',
-            message: 'Invitation token format is invalid.',
-          };
-        }
-
-        return {
-          isValid: true,
-          roomCode: roomValidation.code,
-          invitationToken: token,
-          error: null,
-          message: 'Valid invitation link.',
-        };
+  // Fallback: check if the string before '?' or '#' is a valid room code (e.g. "PORT-7K2M9X?token=...")
+  if (!room) {
+    const prefix = raw.split(/[?#]/)[0].trim().toUpperCase();
+    if (prefix && prefix !== 'JOIN' && prefix !== '/JOIN') {
+      const validation = validateRoomCode(prefix);
+      if (validation.isValid) {
+        room = validation.code;
       }
+    }
+  }
 
-      if (room && !token) {
-        const roomValidation = validateRoomCode(room.trim().toUpperCase());
-        return {
-          isValid: false,
-          roomCode: roomValidation.isValid ? roomValidation.code : room,
-          invitationToken: null,
-          error: 'INVITATION_REQUIRED',
-          message: 'An invitation token or valid invite link is required to join this room.',
-        };
-      }
+  if (room && token) {
+    room = room.trim().toUpperCase();
+    token = token.trim();
 
-      if (!room && token) {
-        return {
-          isValid: false,
-          roomCode: '',
-          invitationToken: null,
-          error: 'MISSING_ROOM_CODE',
-          message: 'Invitation link is missing a room code.',
-        };
-      }
-    } catch {
+    const roomValidation = validateRoomCode(room);
+    if (!roomValidation.isValid) {
       return {
         isValid: false,
-        roomCode: '',
+        roomCode: room,
         invitationToken: null,
-        error: 'MALFORMED_INVITATION',
-        message: 'Malformed invitation link.',
+        error: roomValidation.error,
+        message: roomValidation.message,
       };
     }
+
+    // Token must be at least 16 characters and contain only base64url characters
+    if (token.length < 16 || !/^[A-Za-z0-9_-]+$/.test(token)) {
+      return {
+        isValid: false,
+        roomCode: roomValidation.code,
+        invitationToken: null,
+        error: 'INVALID_TOKEN_FORMAT',
+        message: 'Invitation token format is invalid.',
+      };
+    }
+
+    return {
+      isValid: true,
+      roomCode: roomValidation.code,
+      invitationToken: token,
+      error: null,
+      message: 'Valid invitation link.',
+    };
+  }
+
+  if (room && !token) {
+    const roomValidation = validateRoomCode(room.trim().toUpperCase());
+    return {
+      isValid: false,
+      roomCode: roomValidation.isValid ? roomValidation.code : room,
+      invitationToken: null,
+      error: 'INVITATION_REQUIRED',
+      message: 'An invitation token or valid invite link is required to join this room.',
+    };
+  }
+
+  if (!room && token) {
+    return {
+      isValid: false,
+      roomCode: '',
+      invitationToken: null,
+      error: 'MISSING_ROOM_CODE',
+      message: 'Invitation link is missing a room code.',
+    };
   }
 
   // Plain room code without token
@@ -190,20 +206,21 @@ export function parseInvitation(input) {
  */
 export function isInvitationFragment(hash) {
   if (!hash || typeof hash !== 'string') return false;
-  const clean = hash.startsWith('#') ? hash.slice(1) : hash;
+  const rawClean = hash.startsWith('#') ? hash.slice(1) : hash;
+  const clean = rawClean.replace(/^\/+/, '');
   if (!clean) return false;
 
   if (clean === 'join' || clean.startsWith('join?') || clean.startsWith('join&') || clean.startsWith('join/')) {
     return true;
   }
-  if (/(?:^|[?&#])(?:token|invitation_token|invite)=/i.test(clean)) {
+  if (/(?:^|[?&#])(?:token|invitation_token|invite)=/i.test(rawClean)) {
     return true;
   }
   return false;
 }
 
 /**
- * Check window.location.hash for an invitation fragment, sanitize the URL bar
+ * Check window.location for an invitation fragment or query parameters, sanitize the URL bar
  * using history.replaceState (even if the invitation is invalid or malformed),
  * and return the safe parsed invitation result.
  *
@@ -225,32 +242,38 @@ export function parseAndClearLocationInvitation(
   loc = typeof window !== 'undefined' ? window.location : null,
   hist = typeof window !== 'undefined' ? window.history : null,
 ) {
-  if (!loc || !loc.hash) return null;
+  if (!loc) return null;
 
-  // 1. Only process invitation-related fragments; leave unrelated hashes intact
-  if (!isInvitationFragment(loc.hash)) {
+  const rawHash = typeof loc.hash === 'string' ? loc.hash : '';
+  const rawSearch = typeof loc.search === 'string' ? loc.search : '';
+
+  const hasInviteHash = isInvitationFragment(rawHash);
+  const hasInviteSearch = /(?:^|[?&])(?:token|invitation_token|invite)=/i.test(rawSearch);
+
+  if (!hasInviteHash && !hasInviteSearch) {
     return null;
   }
 
-  // 2. Always attempt history.replaceState to sanitize the address bar regardless of token validity
-  let urlCleared = false;
-  let replaceStateError = null;
-
-  if (hist && typeof hist.replaceState === 'function') {
-    try {
-      const cleanUrl = (loc.pathname || '/') + (loc.search || '');
-      hist.replaceState(null, '', cleanUrl);
-      urlCleared = true;
-    } catch (err) {
-      urlCleared = false;
-      replaceStateError = err ? err.message : 'replaceState failed';
-    }
-  }
-
-  // 3. Defensively parse the fragment without throwing on malformed percent-encoding
+  // 1. Defensively parse BEFORE modifying history / location!
+  // In real browser environments, hist.replaceState immediately mutates window.location.hash and window.location.search!
   let parsed = null;
   try {
-    parsed = parseInvitation(loc.hash);
+    const combined = `${loc.pathname || '/'}${rawSearch}${rawHash}`;
+    parsed = parseInvitation(combined);
+    if (!parsed || !parsed.isValid) {
+      if (hasInviteHash) {
+        const hashParsed = parseInvitation(rawHash);
+        if (hashParsed && hashParsed.isValid) {
+          parsed = hashParsed;
+        }
+      }
+      if ((!parsed || !parsed.isValid) && hasInviteSearch) {
+        const searchParsed = parseInvitation(rawSearch);
+        if (searchParsed && searchParsed.isValid) {
+          parsed = searchParsed;
+        }
+      }
+    }
   } catch {
     parsed = {
       isValid: false,
@@ -261,7 +284,38 @@ export function parseAndClearLocationInvitation(
     };
   }
 
-  // 4. Return safe, non-secret-bearing result
+  // 2. Always attempt history.replaceState to sanitize the address bar regardless of token validity
+  let urlCleared = false;
+  let replaceStateError = null;
+
+  if (hist && typeof hist.replaceState === 'function') {
+    try {
+      let cleanSearch = '';
+      if (rawSearch) {
+        try {
+          const sp = new URLSearchParams(rawSearch.startsWith('?') ? rawSearch.slice(1) : rawSearch);
+          sp.delete('token');
+          sp.delete('invitation_token');
+          sp.delete('invite');
+          sp.delete('room');
+          sp.delete('code');
+          sp.delete('room_code');
+          const remaining = sp.toString();
+          cleanSearch = remaining ? `?${remaining}` : '';
+        } catch {
+          cleanSearch = '';
+        }
+      }
+      const cleanUrl = (loc.pathname || '/') + cleanSearch;
+      hist.replaceState(null, '', cleanUrl);
+      urlCleared = true;
+    } catch (err) {
+      urlCleared = false;
+      replaceStateError = err ? err.message : 'replaceState failed';
+    }
+  }
+
+  // 3. Return safe, non-secret-bearing result
   if (parsed && parsed.isValid && parsed.invitationToken) {
     return {
       isValid: true,
