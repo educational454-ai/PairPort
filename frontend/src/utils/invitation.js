@@ -265,6 +265,7 @@ export function parseAndClearLocationInvitation(
   if (parsed && parsed.isValid && parsed.invitationToken) {
     return {
       isValid: true,
+      hasFragment: true,
       roomCode: parsed.roomCode,
       invitationToken: parsed.invitationToken,
       error: null,
@@ -276,6 +277,7 @@ export function parseAndClearLocationInvitation(
 
   return {
     isValid: false,
+    hasFragment: true,
     roomCode: (parsed && parsed.roomCode) || '',
     invitationToken: null,
     error: (parsed && parsed.error) || 'INVALID_INVITATION',

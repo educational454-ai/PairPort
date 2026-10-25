@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   renderNavbar,
   initNavbar,
+  updateNavbarActive,
   renderHero,
   renderFeatures,
   renderHowItWorks,
@@ -20,10 +21,12 @@ describe('1. renderNavbar', () => {
     assert.ok(html.includes('class="phase-pill"'));
     assert.ok(html.includes('roadmap-btn'));
     assert.ok(html.includes('class="mobile-toggle"'));
+    assert.ok(html.includes('href="#/home"'));
     assert.ok(html.includes('href="#features"'));
     assert.ok(html.includes('href="#how-it-works"'));
-    assert.ok(html.includes('href="#pairing"'));
-    assert.ok(html.includes('href="#workspace"'));
+    assert.ok(html.includes('href="#/pair"'));
+    assert.ok(html.includes('href="#/workspace"'));
+    assert.ok(html.includes('nav-session-dot'));
   });
 });
 
@@ -120,5 +123,72 @@ describe('6. initNavbar event handling and idempotency', () => {
     // Calling again should be idempotent (early return without error)
     initNavbar(rootWithHeader);
     assert.equal(fakeHeader.dataset.navbarInitialized, 'true');
+  });
+});
+
+describe('7. updateNavbarActive', () => {
+  it('updates active class, aria-current, and session dot visibility', () => {
+    let homeActive = false;
+    let homeCurrent = null;
+    let pairActive = false;
+    let pairCurrent = null;
+    let sessionDotHidden = true;
+
+    const mockHomeLink = {
+      dataset: { screen: 'home' },
+      classList: {
+        add: (cls) => { if (cls === 'active') homeActive = true; },
+        remove: (cls) => { if (cls === 'active') homeActive = false; },
+      },
+      setAttribute: (k, v) => { if (k === 'aria-current') homeCurrent = v; },
+      removeAttribute: (k) => { if (k === 'aria-current') homeCurrent = null; },
+    };
+
+    const mockPairLink = {
+      dataset: { screen: 'pairing' },
+      classList: {
+        add: (cls) => { if (cls === 'active') pairActive = true; },
+        remove: (cls) => { if (cls === 'active') pairActive = false; },
+      },
+      setAttribute: (k, v) => { if (k === 'aria-current') pairCurrent = v; },
+      removeAttribute: (k) => { if (k === 'aria-current') pairCurrent = null; },
+    };
+
+    const mockSessionDot = {
+      classList: {
+        toggle: (cls, force) => { if (cls === 'hidden') sessionDotHidden = force; },
+      },
+    };
+
+    const fakeHeader = {
+      querySelectorAll: (sel) => {
+        if (sel === '.nav-link') return [mockHomeLink, mockPairLink];
+        return [];
+      },
+      querySelector: (sel) => {
+        if (sel === '.nav-session-dot') return mockSessionDot;
+        return null;
+      },
+    };
+
+    const fakeRoot = {
+      querySelector: (sel) => (sel === '.site-header' ? fakeHeader : null),
+    };
+
+    // 1. Activate Home without active session
+    updateNavbarActive(fakeRoot, 'home', false);
+    assert.equal(homeActive, true);
+    assert.equal(homeCurrent, 'page');
+    assert.equal(pairActive, false);
+    assert.equal(pairCurrent, null);
+    assert.equal(sessionDotHidden, true);
+
+    // 2. Activate Pairing with active session
+    updateNavbarActive(fakeRoot, 'pairing', true);
+    assert.equal(homeActive, false);
+    assert.equal(homeCurrent, null);
+    assert.equal(pairActive, true);
+    assert.equal(pairCurrent, 'page');
+    assert.equal(sessionDotHidden, false);
   });
 });

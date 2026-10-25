@@ -38,7 +38,7 @@ export function renderHero({ roomCode = state.realRoomCode } = {}) {
           </p>
 
           <div class="hero-cta-group">
-            <a href="#pairing" class="btn btn-primary btn-lg">
+            <a href="#/pair" class="btn btn-primary btn-lg" data-screen="pairing">
               <span>Start P2P Session</span>
               ${icons.arrowRight(18)}
             </a>
@@ -46,7 +46,7 @@ export function renderHero({ roomCode = state.realRoomCode } = {}) {
               ${icons.sparkles(18)}
               <span>How it works</span>
             </a>
-            <a href="#workspace" class="btn btn-ghost btn-lg">
+            <a href="#/workspace" class="btn btn-ghost btn-lg" data-screen="workspace">
               <span>Open P2P Workspace</span>
             </a>
           </div>

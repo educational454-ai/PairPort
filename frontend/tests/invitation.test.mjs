@@ -125,6 +125,7 @@ describe('3. parseAndClearLocationInvitation & isInvitationFragment', () => {
     const result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
     assert.ok(result);
     assert.equal(result.isValid, true);
+    assert.equal(result.hasFragment, true);
     assert.equal(result.urlCleared, true);
     assert.equal(result.roomCode, 'PORT-7K2M9X');
     assert.equal(result.invitationToken, '0123456789abcdef0123456789abcdef');
@@ -147,6 +148,7 @@ describe('3. parseAndClearLocationInvitation & isInvitationFragment', () => {
     const result = parseAndClearLocationInvitation(fakeLocation, fakeHistory);
     assert.ok(result);
     assert.equal(result.isValid, false);
+    assert.equal(result.hasFragment, true);
     assert.equal(result.urlCleared, true, 'Malformed invitation fragment must still be cleared from address bar');
     assert.equal(replacedUrl, '/app/');
     assert.equal(result.invitationToken, null);

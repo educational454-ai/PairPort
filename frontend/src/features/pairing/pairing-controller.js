@@ -131,7 +131,7 @@ export function initPairing(
 ) {
   const pairingSection = root.querySelector('#pairing');
   if (!pairingSection || pairingSection.dataset.pairingInitialized === 'true') {
-    return;
+    return { locationInvite: null };
   }
   pairingSection.dataset.pairingInitialized = 'true';
 
@@ -303,4 +303,6 @@ export function initPairing(
       signaling.joinRoom(result.code, token);
     });
   }
+
+  return { locationInvite };
 }

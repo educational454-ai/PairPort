@@ -14,10 +14,12 @@ import { icons } from './components/icons.js';
 import { initModal } from './components/modal.js';
 import { escapeHtml } from './utils/ui-helpers.js';
 import { state } from './state/app-state.js';
+import { router, hasActiveSession } from './services/router.js';
 
 import {
   renderNavbar,
   initNavbar,
+  updateNavbarActive,
   renderHero,
   renderFeatures,
   renderHowItWorks,
@@ -49,18 +51,29 @@ export function startApp(root = document.querySelector('#app')) {
     throw new Error('PairPort app root (#app) was not found.');
   }
 
-  // Render complete HTML markup
+  // Render complete HTML markup organized into 3 persistent screen containers
   root.innerHTML = `
     <div class="site-wrapper">
       ${renderNavbar()}
       <main id="main-content">
-        ${renderHero()}
-        ${renderFeatures()}
-        ${renderHowItWorks()}
-        ${renderPairingSection({ liveSessionHtml: renderLiveSessionPanel() })}
-        ${renderWorkspaceSection()}
+        <!-- Screen 1: Home -->
+        <div id="screen-home" class="screen-view" role="region" aria-label="Home Screen">
+          ${renderHero()}
+          ${renderFeatures()}
+          ${renderHowItWorks()}
+          ${renderFooter()}
+        </div>
+
+        <!-- Screen 2: Pairing -->
+        <div id="screen-pairing" class="screen-view hidden" role="region" aria-label="Room Pairing Screen">
+          ${renderPairingSection({ liveSessionHtml: renderLiveSessionPanel() })}
+        </div>
+
+        <!-- Screen 3: Workspace -->
+        <div id="screen-workspace" class="screen-view hidden" role="region" aria-label="P2P Workspace Screen">
+          ${renderWorkspaceSection()}
+        </div>
       </main>
-      ${renderFooter()}
     </div>
   `;
 
@@ -68,10 +81,75 @@ export function startApp(root = document.querySelector('#app')) {
   initNavbar(root);
 
   // Initialize pairing interactions (create room, join room, validation, copy code)
-  initPairing(root);
+  // NOTE: This runs parseAndClearLocationInvitation()!
+  const pairingResult = initPairing(root);
+
+  // Helper function to switch screen container visibility without destroying DOM
+  function syncScreen(routeInfo) {
+    const screen = routeInfo?.screen || 'home';
+    const anchor = routeInfo?.anchor || null;
+
+    const screens = {
+      home: root.querySelector('#screen-home'),
+      pairing: root.querySelector('#screen-pairing'),
+      workspace: root.querySelector('#screen-workspace'),
+    };
+
+    Object.entries(screens).forEach(([name, el]) => {
+      if (!el) return;
+      const isActive = name === screen;
+      el.classList.toggle('screen-active', isActive);
+      el.classList.toggle('hidden', !isActive);
+      el.setAttribute('aria-hidden', String(!isActive));
+    });
+
+    updateNavbarActive(root, screen, hasActiveSession(state));
+
+    if (screen === 'home' && anchor) {
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        window.requestAnimationFrame(() => {
+          const targetEl = root.querySelector(`#${anchor}`);
+          if (targetEl && typeof targetEl.scrollIntoView === 'function') {
+            targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        });
+      }
+    } else if (typeof window !== 'undefined' && screen !== 'home' && typeof window.scrollTo === 'function') {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
+  }
+
+  // Subscribe router changes to sync screen visibility
+  router.subscribe((newRoute) => {
+    syncScreen(newRoute);
+  });
+
+  // Track session pairing state for smooth workspace transition
+  let wasPaired = false;
 
   // Initialize connection controller (signaling & WebRTC connection lifecycle)
   initConnectionController(root, {
+    onSessionUIUpdate: () => {
+      const current = router.getCurrentScreen();
+      const hasSession = hasActiveSession(state);
+      updateNavbarActive(root, current, hasSession);
+
+      // Transition to workspace automatically when both data channels open
+      const isPaired = state.dataChannelState === 'open' && state.fileChannelState === 'open';
+      if (isPaired && !wasPaired) {
+        wasPaired = true;
+        if (current === 'pairing') {
+          router.navigate('workspace');
+        }
+      } else if (!isPaired) {
+        wasPaired = false;
+      }
+
+      // If user is on workspace and session is lost/left, guard routes back to pairing
+      if (current === 'workspace' && !hasSession) {
+        router.navigate('pairing');
+      }
+    },
     onChatUIUpdate: () => updateChatUI(root),
     onFilesUIUpdate: () => updateFilesUI(root),
   });
@@ -84,6 +162,27 @@ export function startApp(root = document.querySelector('#app')) {
 
   // Initialize roadmap modal
   initModal();
+
+  // Wire up workspace leave button to trigger leave room confirmation
+  const workspaceLeaveBtn = root.querySelector('#workspace-leave-btn');
+  if (workspaceLeaveBtn) {
+    workspaceLeaveBtn.addEventListener('click', () => {
+      const leaveBtn = root.querySelector('#leave-room-btn');
+      if (leaveBtn) {
+        leaveBtn.click();
+      }
+    });
+  }
+
+  // If an invitation token or invitation fragment attempt was detected, route to pairing screen
+  const hadInvitationAttempt = Boolean(state.invitationToken || pairingResult?.locationInvite);
+  if (hadInvitationAttempt && router.getCurrentScreen() !== 'pairing') {
+    router.navigate('pairing', { replace: true });
+  }
+
+  // Start the router and synchronize the initial screen
+  const initialRoute = router.start();
+  syncScreen(initialRoute);
 }
 
 // ==========================================
@@ -152,6 +251,10 @@ function renderWorkspaceSection() {
               <button type="button" id="clear-chat-btn" class="btn btn-ghost btn-xs" title="Clear chat messages">
                 ${icons.refresh(14)}
                 <span>Clear Chat</span>
+              </button>
+              <button type="button" id="workspace-leave-btn" class="btn btn-outline-danger btn-xs" title="Leave room session">
+                ${icons.x(14)}
+                <span>Leave</span>
               </button>
             </div>
           </div>

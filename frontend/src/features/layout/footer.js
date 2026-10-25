@@ -29,11 +29,11 @@ export function renderFooter() {
           <div class="footer-nav-group">
             <h4 class="footer-group-title">Navigation</h4>
             <ul class="footer-links">
-              <li><a href="#hero">Overview</a></li>
+              <li><a href="#/home">Overview</a></li>
               <li><a href="#features">Features</a></li>
               <li><a href="#how-it-works">How it Works</a></li>
-              <li><a href="#pairing">Room Pairing</a></li>
-              <li><a href="#workspace">P2P Workspace</a></li>
+              <li><a href="#/pair">Room Pairing</a></li>
+              <li><a href="#/workspace">P2P Workspace</a></li>
             </ul>
           </div>
 

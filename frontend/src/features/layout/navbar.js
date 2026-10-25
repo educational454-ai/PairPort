@@ -16,7 +16,7 @@ export function renderNavbar() {
   return `
     <header class="site-header" role="banner">
       <div class="header-container">
-        <a href="#hero" class="brand-link" aria-label="PairPort Home">
+        <a href="#/home" class="brand-link" aria-label="PairPort Home" data-screen="home">
           ${icons.logo(32)}
           <span class="brand-name">${APP_CONFIG.name}</span>
           <span class="phase-pill" title="Phase 5 WebRTC P2P File Transfer Active">Phase 5 P2P Files & Chat</span>
@@ -24,10 +24,16 @@ export function renderNavbar() {
 
         <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
           <ul class="nav-links">
-            <li><a href="#features" class="nav-link">Features</a></li>
-            <li><a href="#how-it-works" class="nav-link">How it Works</a></li>
-            <li><a href="#pairing" class="nav-link">Pairing (Live)</a></li>
-            <li><a href="#workspace" class="nav-link">P2P Chat & Workspace</a></li>
+            <li><a href="#/home" class="nav-link" data-screen="home">Home</a></li>
+            <li><a href="#features" class="nav-link" data-screen="home" data-anchor="features">Features</a></li>
+            <li><a href="#how-it-works" class="nav-link" data-screen="home" data-anchor="how-it-works">How it Works</a></li>
+            <li><a href="#/pair" class="nav-link" data-screen="pairing">Pairing</a></li>
+            <li>
+              <a href="#/workspace" class="nav-link" data-screen="workspace">
+                <span>Workspace</span>
+                <span class="nav-session-dot hidden" title="Active WebRTC Session" aria-label="Active session"></span>
+              </a>
+            </li>
           </ul>
         </nav>
 
@@ -36,7 +42,7 @@ export function renderNavbar() {
             ${icons.info(16)}
             <span>Roadmap</span>
           </button>
-          <a href="#pairing" class="btn btn-primary btn-sm header-cta">
+          <a href="#/pair" class="btn btn-primary btn-sm header-cta" data-screen="pairing">
             <span>Start Sharing</span>
             ${icons.arrowRight(16)}
           </a>
@@ -87,5 +93,36 @@ export function initNavbar(root = document) {
     roadmapBtn.addEventListener('click', () => {
       openPhaseModal();
     });
+  }
+}
+
+/**
+ * Update active link highlights and active session indicator in navbar.
+ *
+ * @param {HTMLElement} root - Root container
+ * @param {string} currentScreen - Current screen identifier ('home', 'pairing', 'workspace')
+ * @param {boolean} [hasSession=false] - Whether an active session is established
+ */
+export function updateNavbarActive(root, currentScreen, hasSession = false) {
+  if (!root) return;
+  const header = root.querySelector('.site-header');
+  if (!header) return;
+
+  const navLinks = header.querySelectorAll('.nav-link');
+  navLinks.forEach((link) => {
+    const screen = link.dataset.screen;
+    const isAnchor = Boolean(link.dataset.anchor);
+    if (screen === currentScreen && !isAnchor) {
+      link.classList.add('active');
+      link.setAttribute('aria-current', 'page');
+    } else {
+      link.classList.remove('active');
+      link.removeAttribute('aria-current');
+    }
+  });
+
+  const sessionDot = header.querySelector('.nav-session-dot');
+  if (sessionDot) {
+    sessionDot.classList.toggle('hidden', !hasSession);
   }
 }

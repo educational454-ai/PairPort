@@ -262,7 +262,112 @@ describe('5. initPairing and setPairingFeedback', () => {
     state.invitationRoomCode = null;
 
     // Idempotency: calling again should return early
-    initPairing(fakeRoot, { signaling: mockSignaling, toast: () => {} });
+    const idempotentRes = initPairing(fakeRoot, { signaling: mockSignaling, toast: () => {} });
     assert.equal(fakeSection.dataset.pairingInitialized, 'true');
+    assert.equal(idempotentRes.locationInvite, null);
+  });
+});
+
+describe('6. initPairing location invitation return contract and error handling', () => {
+  it('returns locationInvite with isValid: false and sets error feedback on malformed invitation', () => {
+    let replacedUrl = null;
+    let feedbackText = null;
+    let feedbackClass = null;
+
+    const fakeFeedback = {
+      set textContent(val) { feedbackText = val; },
+      get textContent() { return feedbackText; },
+      set className(val) { feedbackClass = val; },
+      get className() { return feedbackClass; },
+    };
+
+    const fakeInput = { value: '', focus: () => {} };
+    const fakeSection = {
+      dataset: {},
+      querySelector: (sel) => {
+        if (sel === '#room-code-input') return fakeInput;
+        if (sel === '#join-code-feedback') return fakeFeedback;
+        return null;
+      },
+    };
+
+    const fakeRoot = {
+      querySelector: (sel) => (sel === '#pairing' ? fakeSection : null),
+    };
+
+    const fakeLocation = {
+      hash: '#join?room=BAD_ROOM&token=short',
+      pathname: '/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: (s, t, url) => { replacedUrl = url; },
+    };
+
+    const res = initPairing(fakeRoot, {
+      location: fakeLocation,
+      history: fakeHistory,
+      toast: () => {},
+    });
+
+    assert.ok(res);
+    assert.ok(res.locationInvite);
+    assert.equal(res.locationInvite.isValid, false);
+    assert.equal(res.locationInvite.hasFragment, true);
+    assert.equal(replacedUrl, '/', 'Address bar must be cleaned of malformed token');
+    assert.equal(state.invitationToken, null, 'Must clear in-memory token on invalid invitation');
+    assert.ok(feedbackClass.includes('feedback-error'));
+  });
+
+  it('returns locationInvite with isValid: true on authorized valid invitation', () => {
+    let replacedUrl = null;
+    let feedbackText = null;
+    let feedbackClass = null;
+
+    const fakeFeedback = {
+      set textContent(val) { feedbackText = val; },
+      get textContent() { return feedbackText; },
+      set className(val) { feedbackClass = val; },
+      get className() { return feedbackClass; },
+    };
+
+    const fakeInput = { value: '', focus: () => {} };
+    const fakeSection = {
+      dataset: {},
+      querySelector: (sel) => {
+        if (sel === '#room-code-input') return fakeInput;
+        if (sel === '#join-code-feedback') return fakeFeedback;
+        return null;
+      },
+    };
+
+    const fakeRoot = {
+      querySelector: (sel) => (sel === '#pairing' ? fakeSection : null),
+    };
+
+    const fakeLocation = {
+      hash: '#join?room=PORT-9K3M1X&token=valid_token_1234567890abcdef',
+      pathname: '/',
+      search: '',
+    };
+    const fakeHistory = {
+      replaceState: (s, t, url) => { replacedUrl = url; },
+    };
+
+    const res = initPairing(fakeRoot, {
+      location: fakeLocation,
+      history: fakeHistory,
+      toast: () => {},
+    });
+
+    assert.ok(res);
+    assert.ok(res.locationInvite);
+    assert.equal(res.locationInvite.isValid, true);
+    assert.equal(res.locationInvite.hasFragment, true);
+    assert.equal(res.locationInvite.roomCode, 'PORT-9K3M1X');
+    assert.equal(fakeInput.value, 'PORT-9K3M1X');
+    assert.equal(state.invitationToken, 'valid_token_1234567890abcdef');
+    assert.equal(state.invitationRoomCode, 'PORT-9K3M1X');
+    assert.ok(feedbackClass.includes('feedback-success'));
   });
 });
