@@ -158,7 +158,7 @@ export function renderPairingSection({ liveSessionHtml = '' } = {}) {
                   </button>
                 </div>
                 <div id="join-code-feedback" class="form-feedback" aria-live="polite"></div>
-                <p class="input-helper">Paste a secure invitation link or enter code with authorized token.</p>
+                <p class="input-helper">Enter the 6-character room code or paste an invitation link.</p>
               </div>
 
               <div class="card-actions">
