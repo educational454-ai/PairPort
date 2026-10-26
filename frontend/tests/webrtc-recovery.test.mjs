@@ -21,6 +21,7 @@ import {
 } from '../src/services/peer-connection.js';
 import { SignalingClient, SIGNALING_STATES } from '../src/services/signaling.js';
 import { initConnectionController } from '../src/features/connection/connection-controller.js';
+import { computeSessionStatusInfo } from '../src/features/connection/session-panel.js';
 import { state, createInitialState } from '../src/state/app-state.js';
 
 describe('WebRTC Recovery Lifecycle Hardening (Step 9J-3B)', () => {
@@ -339,6 +340,152 @@ describe('WebRTC Recovery Lifecycle Hardening (Step 9J-3B)', () => {
       } finally {
         if (origRevoke) globalThis.URL.revokeObjectURL = origRevoke;
       }
+    });
+  });
+
+  describe('6. Safe Diagnostics & Bounded Fresh Connection Recovery', () => {
+    it('records candidate summary and state transitions without exposing IP addresses or tokens', async () => {
+      const svc = new PeerConnectionService();
+      svc._recordStateTransition('ConnectionState', 'connecting', 'connected');
+      svc._recordStateTransition('ICEState', 'checking', 'connected');
+
+      // Emulate candidate arrival with IP
+      await svc.handleRemoteCandidate({
+        candidate: {
+          candidate: 'candidate:1 1 UDP 2122260223 192.168.1.100 54321 typ host',
+          type: 'host',
+          protocol: 'udp',
+        },
+      });
+
+      const diag = await svc.getConnectionDiagnostics();
+
+      assert.equal(diag.remoteCandidateTypes.includes('host/udp'), true);
+      assert.equal(diag.hasRelayCandidate, false);
+      assert.equal(diag.stateTransitions.length, 2);
+      assert.equal(diag.stateTransitions[0].from, 'connecting');
+      assert.equal(diag.stateTransitions[0].to, 'connected');
+
+      const diagString = JSON.stringify(diag);
+      assert.equal(diagString.includes('192.168.1.100'), false, 'Diagnostics must not expose raw IP addresses');
+      assert.equal(diagString.includes('54321'), false, 'Diagnostics must not expose port numbers');
+    });
+
+    it('identifies relay candidates in diagnostics when present', async () => {
+      const svc = new PeerConnectionService();
+      await svc.handleRemoteCandidate({
+        candidate: {
+          candidate: 'candidate:2 1 UDP 33562367 198.51.100.1 3478 typ relay raddr 0.0.0.0 rport 0',
+          type: 'relay',
+          protocol: 'udp',
+        },
+      });
+
+      const diag = await svc.getConnectionDiagnostics();
+      assert.equal(diag.hasRelayCandidate, true);
+      assert.equal(diag.hasRemoteRelay, true);
+    });
+
+    it('tracks whether PC was closed before restart was attempted', async () => {
+      const svc = new PeerConnectionService();
+      svc.pc = {
+        signalingState: 'closed',
+        connectionState: 'closed',
+      };
+
+      const result = await svc.attemptIceRestart('peer connection failed');
+      assert.equal(result, false);
+      assert.equal(svc.wasClosedBeforeRestart, true);
+
+      const diag = await svc.getConnectionDiagnostics();
+      assert.equal(diag.wasClosedBeforeRestart, true);
+      assert.equal(diag.lastRestartReason, 'peer connection failed');
+    });
+
+    it('host initiates fresh negotiation when in-place restart is not viable and retries are within limit', async () => {
+      const svc = new PeerConnectionService();
+      svc.role = 'host';
+      // PC is failed, so in-place restart is not viable under RFC 8831
+      svc.pc = {
+        signalingState: 'stable',
+        connectionState: 'failed',
+      };
+      svc.chatChannel = { readyState: 'closed' };
+
+      let freshNegotiationCalled = false;
+      let passedRecoveryFlag = false;
+
+      svc.startPeerConnection = async (role, isRecovery) => {
+        freshNegotiationCalled = true;
+        passedRecoveryFlag = isRecovery;
+        svc.pc = {
+          signalingState: 'stable',
+          connectionState: 'connecting',
+        };
+      };
+
+      const result = await svc.attemptIceRestart('Peer connection failed');
+      assert.equal(result, true, 'Host should initiate fresh recovery negotiation');
+      assert.equal(freshNegotiationCalled, true);
+      assert.equal(passedRecoveryFlag, true);
+      assert.equal(svc.iceRestartAttempts, 1);
+    });
+
+    it('guest awaits host fresh offer and increments attempt count without crashing', async () => {
+      const svc = new PeerConnectionService();
+      svc.role = 'guest';
+      svc.pc = {
+        signalingState: 'stable',
+        connectionState: 'failed',
+      };
+
+      let reconnectEventEmitted = null;
+      svc.on('reconnecting', (ev) => {
+        reconnectEventEmitted = ev;
+      });
+
+      const result = await svc.attemptIceRestart('Peer connection failed');
+      assert.equal(result, true);
+      assert.equal(svc.iceRestartAttempts, 1);
+      assert.ok(reconnectEventEmitted);
+      assert.equal(reconnectEventEmitted.attempt, 1);
+    });
+
+    it('terminates recovery when maxIceRestartAttempts (3) is exhausted without infinite loops', async () => {
+      const svc = new PeerConnectionService();
+      svc.role = 'host';
+      svc.iceRestartAttempts = 3;
+      svc.pc = {
+        signalingState: 'stable',
+        connectionState: 'failed',
+      };
+
+      let terminalFailureEmitted = false;
+      svc.on('terminalFailure', (ev) => {
+        terminalFailureEmitted = true;
+        assert.equal(ev.reason, 'EXHAUSTED_RETRIES');
+      });
+
+      const result = await svc.attemptIceRestart('Connection failure test');
+      assert.equal(result, false, 'Must not restart when attempts are exhausted');
+      assert.equal(terminalFailureEmitted, true);
+      assert.equal(svc.connectionState, PEER_CONNECTION_STATES.FAILED);
+    });
+
+    it('session status info distinguishes retry exhaustion from initial connectivity failure', () => {
+      const testState = createInitialState();
+      testState.peerConnectionState = PEER_CONNECTION_STATES.FAILED;
+
+      // 0 attempts - not exhausted yet
+      testState.connectionDiagnostics = { reconnectAttempts: 0, maxReconnectAttempts: 3 };
+      const info1 = computeSessionStatusInfo(testState);
+      assert.ok(info1.statusPillHtml.includes('Direct connectivity unavailable'));
+      assert.ok(!info1.statusPillHtml.includes('Retries exhausted'));
+
+      // 3 attempts - retries exhausted
+      testState.connectionDiagnostics = { reconnectAttempts: 3, maxReconnectAttempts: 3 };
+      const info2 = computeSessionStatusInfo(testState);
+      assert.ok(info2.statusPillHtml.includes('Retries exhausted'));
     });
   });
 });

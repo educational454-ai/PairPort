@@ -200,6 +200,12 @@ export function initConnectionController(root = document, {
       return;
     }
 
+    const maxAttempts = peerConnection.maxIceRestartAttempts || 3;
+    if ((peerConnection.iceRestartAttempts || 0) >= maxAttempts) {
+      console.warn(`[PairPort Recovery] Recovery attempts (${peerConnection.iceRestartAttempts}/${maxAttempts}) exhausted, skipping (${triggerSource})`);
+      return;
+    }
+
     isRecoveringWebRTC = true;
     try {
       const canRestart = typeof peerConnection.canAttemptIceRestart === 'function'
@@ -209,13 +215,13 @@ export function initConnectionController(root = document, {
       if (canRestart) {
         console.log(`[PairPort Recovery] Attempting ICE restart (${triggerSource})`);
         const restarted = await peerConnection.attemptIceRestart(triggerSource);
-        if (!restarted && state.realRole === 'host' && typeof peerConnection.startPeerConnection === 'function') {
+        if (!restarted && state.realRole === 'host' && (peerConnection.iceRestartAttempts || 0) < maxAttempts && typeof peerConnection.startPeerConnection === 'function') {
           console.log(`[PairPort Recovery] ICE restart returned false. Host initiating fresh negotiation (${triggerSource})`);
-          await peerConnection.startPeerConnection('host');
+          await peerConnection.startPeerConnection('host', true);
         }
-      } else if (state.realRole === 'host' && typeof peerConnection.startPeerConnection === 'function') {
+      } else if (state.realRole === 'host' && (peerConnection.iceRestartAttempts || 0) < maxAttempts && typeof peerConnection.startPeerConnection === 'function') {
         console.log(`[PairPort Recovery] Channels or connection unrecoverable via ICE restart. Host initiating fresh negotiation (${triggerSource})`);
-        await peerConnection.startPeerConnection('host');
+        await peerConnection.startPeerConnection('host', true);
       } else {
         console.log(`[PairPort Recovery] Guest awaiting host fresh offer (${triggerSource})`);
       }

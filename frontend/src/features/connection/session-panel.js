@@ -54,8 +54,14 @@ export function computeSessionStatusInfo(currentState = state) {
     statusPillHtml = `Reconnecting: <strong>Attempt ${currentState.reconnectAttempt || 1}/3</strong> (Recovering link...)`;
     metaBadgeText = 'Reconnecting WebRTC...';
   } else if (isPeerFailed) {
+    const attempts = currentState.connectionDiagnostics?.reconnectAttempts ?? currentState.reconnectAttempt ?? 0;
+    const maxAttempts = currentState.connectionDiagnostics?.maxReconnectAttempts ?? 3;
+    const isRetriesExhausted = attempts >= maxAttempts;
+
     statusDotClass = 'error';
-    statusPillHtml = `Connection: <strong>Failed</strong> (Retries exhausted)`;
+    statusPillHtml = isRetriesExhausted
+      ? `Connection: <strong>Failed</strong> (Retries exhausted. TURN relay recommended)`
+      : `Connection: <strong>Failed</strong> (Direct connectivity unavailable. TURN relay recommended)`;
     metaBadgeText = 'Connection Failed';
   } else if (isDataChannelOpen || isFileChannelOpen) {
     if (isRelayActive) {
@@ -141,8 +147,14 @@ export function renderLiveSessionPanel(currentState = state) {
     overallStatusClass = 'reconnecting';
     overallStatusText = `Reconnecting WebRTC link (Attempt ${currentState.reconnectAttempt || 1}/3)...`;
   } else if (isPeerFailed) {
+    const attempts = currentState.connectionDiagnostics?.reconnectAttempts ?? currentState.reconnectAttempt ?? 0;
+    const maxAttempts = currentState.connectionDiagnostics?.maxReconnectAttempts ?? 3;
+    const isRetriesExhausted = attempts >= maxAttempts;
+
     overallStatusClass = 'error';
-    overallStatusText = 'WebRTC Connection Failed (Retries exhausted. TURN relay recommended)';
+    overallStatusText = isRetriesExhausted
+      ? 'WebRTC Connection Failed (Retries exhausted. TURN relay recommended)'
+      : 'WebRTC Connection Failed (Direct connectivity unavailable. TURN relay recommended)';
   } else if (isDataChannelOpen && isFileChannelOpen) {
     if (isRelayActive) {
       overallStatusClass = 'relay';
@@ -336,6 +348,20 @@ export function renderLiveSessionPanel(currentState = state) {
           <div class="diag-card">
             <span class="diag-label">TURN Relay Configured</span>
             <span class="diag-value">${APP_CONFIG.iceConfig?.isTurnConfigured ? 'Yes (Credentials Loaded)' : 'No (STUN-only Mode)'}</span>
+          </div>
+          <div class="diag-card">
+            <span class="diag-label">Relay Candidate Available</span>
+            <span class="diag-value">${diag.hasRelayCandidate ? 'Yes (Relay Present)' : 'No (Direct / STUN Only)'}</span>
+          </div>
+          ${diag.candidatePairFailureReason ? `
+          <div class="diag-card">
+            <span class="diag-label">Pair Failure Reason</span>
+            <span class="diag-value">${diag.candidatePairFailureReason}</span>
+          </div>
+          ` : ''}
+          <div class="diag-card">
+            <span class="diag-label">Candidate Types</span>
+            <span class="diag-value">Local: [${(diag.localCandidateTypes || []).join(', ') || 'none'}] · Remote: [${(diag.remoteCandidateTypes || []).join(', ') || 'none'}]</span>
           </div>
           <div class="diag-card">
             <span class="diag-label">Privacy Shield</span>
