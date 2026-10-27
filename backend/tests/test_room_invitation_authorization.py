@@ -48,7 +48,11 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
     """Unit and concurrency tests for backend RoomManager invitation handling."""
 
     async def asyncSetUp(self) -> None:
-        self.manager = RoomManager(default_ttl=ROOM_TTL_SECONDS, require_invitation_token=True)
+        self.manager = RoomManager(
+            default_ttl=ROOM_TTL_SECONDS,
+            require_invitation_token=True,
+            max_participants_per_room=2,
+        )
 
     async def test_invitation_generation_and_entropy(self) -> None:
         """Verify invitation token is generated with at least 128 bits of CSPRNG entropy."""
@@ -111,7 +115,7 @@ class TestRoomInvitationAuthorization(unittest.IsolatedAsyncioTestCase):
 
     async def test_room_code_only_guest_join_allowed_by_default(self) -> None:
         """Verify guest can join with room code alone when require_invitation_token=False."""
-        code_manager = RoomManager(require_invitation_token=False)
+        code_manager = RoomManager(require_invitation_token=False, max_participants_per_room=2)
         room = await code_manager.create_room()
         await code_manager.join_room(room.code, object(), role="host")
 
@@ -387,7 +391,7 @@ class TestWebSocketInvitationProtocolIntegration(unittest.TestCase):
     def test_third_participant_rejected_with_room_full(self) -> None:
         """Verify third participant cannot join even if presenting the invitation token."""
         with self.client.websocket_connect("/ws") as host_ws:
-            host_ws.send_json({"type": "create"})
+            host_ws.send_json({"type": "create", "payload": {"max_participants": 2}})
             created = host_ws.receive_json()
             room_code = created["payload"]["room_code"]
             token = created["payload"]["invitation_token"]

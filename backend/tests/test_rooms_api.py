@@ -2,6 +2,7 @@ import unittest
 from starlette.testclient import TestClient
 
 from app.config import (
+    MAX_PARTICIPANTS_PER_ROOM,
     REST_RATE_LIMIT_CHECK_ROOM_PER_MIN,
     REST_RATE_LIMIT_CREATE_ROOM_PER_MIN,
     ROOM_CODE_LENGTH,
@@ -33,7 +34,7 @@ class TestRoomsAPI(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["room_code"].startswith(ROOM_CODE_PREFIX))
         self.assertEqual(len(data["room_code"]), len(ROOM_CODE_PREFIX) + ROOM_CODE_LENGTH)
-        self.assertEqual(data["max_participants"], 2)
+        self.assertEqual(data["max_participants"], MAX_PARTICIPANTS_PER_ROOM)
 
     def test_check_room_status_rest_and_redaction(self) -> None:
         """Verify room lookup succeeds and participants_count is strictly redacted."""

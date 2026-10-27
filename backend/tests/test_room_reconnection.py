@@ -280,7 +280,7 @@ class TestHostRoleTakeoverAndReconnectManager(unittest.IsolatedAsyncioTestCase):
     async def test_third_participant_rejected_while_slot_is_reserved(self) -> None:
         """When 1 participant is connected and 1 is temporarily disconnected, third client is rejected."""
         t0 = 7000.0
-        room = await self.manager.create_room(now=t0)
+        room = await self.manager.create_room(max_participants=2, now=t0)
         _, host_p, _ = await self.manager.join_room(room.code, object(), role="host", now=t0)
         _, guest_p, _ = await self.manager.join_room(
             room.code, object(), invitation_token=room.invitation_token, role="guest", now=t0

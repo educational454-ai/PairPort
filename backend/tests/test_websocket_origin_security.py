@@ -147,7 +147,7 @@ class TestWebSocketOriginSecurity(unittest.TestCase):
         # Legitimate host creates room
         host_client = TestClient(app, headers={"origin": "http://localhost:5173"})
         with host_client.websocket_connect("/ws") as host_ws:
-            host_ws.send_json({"type": "create"})
+            host_ws.send_json({"type": "create", "payload": {"max_participants": 2}})
             created = host_ws.receive_json()
             room_code = created["payload"]["room_code"]
             invitation_token = created["payload"]["invitation_token"]

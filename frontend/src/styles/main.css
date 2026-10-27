@@ -1902,6 +1902,238 @@ input:disabled,
   color: var(--text-primary);
 }
 
+/* Phase 3: Recipient Selector */
+.file-recipient-selector {
+  background: rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  backdrop-filter: blur(8px);
+}
+
+.recipient-selector-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.recipient-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recipient-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  color: var(--accent-focus);
+  text-transform: uppercase;
+}
+
+.recipient-count-badge {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius-pill);
+}
+
+.recipient-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recipients-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recipient-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  user-select: none;
+}
+
+.recipient-chip:hover:not(.disabled):not(.local) {
+  background: rgba(99, 102, 241, 0.12);
+  border-color: rgba(99, 102, 241, 0.35);
+  color: #c7d2fe;
+}
+
+.recipient-chip.selected {
+  background: rgba(99, 102, 241, 0.2);
+  border-color: #6366f1;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.25);
+}
+
+.recipient-chip.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-style: dashed;
+}
+
+.recipient-chip.local {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.06);
+  cursor: default;
+  opacity: 0.85;
+}
+
+.recipient-indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.recipient-indicator-dot.status-ready {
+  background: #10b981;
+  box-shadow: 0 0 6px #10b981;
+}
+
+.recipient-indicator-dot.status-connecting {
+  background: #38bdf8;
+  box-shadow: 0 0 6px #38bdf8;
+}
+
+.recipient-indicator-dot.status-failed {
+  background: #ef4444;
+}
+
+.recipient-indicator-dot.status-unready {
+  background: #64748b;
+}
+
+.recipient-indicator-dot.local {
+  background: #818cf8;
+}
+
+.recipient-name {
+  font-weight: 600;
+  font-family: var(--font-heading);
+}
+
+.recipient-role-badge {
+  font-size: 0.65rem;
+  padding: 1px 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+.recipient-status-tag {
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  text-transform: uppercase;
+}
+
+.recipient-status-tag.status-ready {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+}
+
+.recipient-status-tag.status-connecting {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+}
+
+.recipient-status-tag.status-failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+}
+
+.recipient-status-tag.status-unready {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+}
+
+.recipient-status-tag.local {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+}
+
+.recipient-notice {
+  margin-top: 10px;
+  font-size: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.recipient-notice.standby {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-muted);
+}
+
+.recipient-notice.warning {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: #fcd34d;
+}
+
+.recipient-notice.waiting {
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  color: #7dd3fc;
+}
+
+/* Multi-Active Transfers */
+.multi-transfers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.multi-item {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.file-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.peer-target-tag {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+}
+
+.peer-target-badge {
+  font-size: 0.72rem;
+  color: #c4b5fd;
+  font-family: var(--font-mono);
+}
+
 /* Drop Zone */
 .drop-zone {
   border: 2px dashed rgba(139, 92, 246, 0.35);
@@ -3337,6 +3569,282 @@ input:disabled,
 
   .quick-start-guide {
     padding: 12px 10px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   13B. Live Mesh Network Topology & Telemetry (Phase 2B)
+   -------------------------------------------------------------------------- */
+.mesh-topology-section {
+  background: rgba(11, 14, 23, 0.75);
+  border-bottom: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-subtle);
+  padding: 16px 24px;
+  position: relative;
+}
+
+.topo-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.topo-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topo-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+  animation: topoDotPulse 2s ease-in-out infinite;
+}
+
+@keyframes topoDotPulse {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.topo-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-primary);
+  margin: 0;
+  text-transform: uppercase;
+  font-family: var(--font-heading);
+}
+
+.topo-pill {
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+  background: rgba(99, 102, 241, 0.12);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  border-radius: var(--radius-full);
+  padding: 2px 10px;
+}
+
+.topo-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.topo-canvas-host {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: #0b0e17;
+  overflow: hidden;
+  box-shadow: inset 0 2px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topo-svg-canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 280px;
+}
+
+.topo-node {
+  cursor: pointer;
+  outline: none;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.topo-node:hover {
+  transform: scale(1.06);
+}
+
+.topo-node:focus-visible .topo-status-ring {
+  stroke: #60a5fa;
+  stroke-width: 3.5px;
+}
+
+.topo-legend-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: var(--radius-sm);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.legend-swatch.direct { background: #10b981; }
+.legend-swatch.relay { background: #a855f7; }
+.legend-swatch.connecting { background: #38bdf8; }
+.legend-swatch.reconnecting { background: #f59e0b; }
+.legend-swatch.failed { background: #ef4444; }
+.legend-swatch.activity {
+  background: #a78bfa;
+  box-shadow: 0 0 6px #a78bfa;
+  animation: topoDotPulse 1.2s infinite;
+}
+
+/* Detail Inspector Card */
+.topo-detail-card {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  backdrop-filter: blur(8px);
+}
+
+.topo-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.topo-detail-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topo-detail-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.topo-detail-badge {
+  font-size: 0.68rem;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.topo-detail-badge.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.topo-detail-badge.connecting {
+  background: rgba(56, 189, 248, 0.15);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.topo-detail-badge.reconnecting {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.topo-detail-badge.failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.topo-detail-role {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.topo-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px 14px;
+}
+
+.topo-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.metric-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.metric-val {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.metric-val.val-good {
+  color: #6ee7b7;
+}
+
+.metric-val.val-direct {
+  color: #6ee7b7;
+}
+
+.metric-val.val-relay {
+  color: #c084fc;
+}
+
+.metric-val.val-shielded {
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+}
+
+.topo-edge-line.traffic-active {
+  stroke-width: 3.5px;
+  filter: drop-shadow(0 0 6px #a78bfa);
+}
+
+@keyframes topoPacketPulse {
+  0% { transform: scale(0.8); opacity: 0.7; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.8); opacity: 0.7; }
+}
+
+.topo-activity-packet {
+  animation: topoPacketPulse 0.6s ease-in-out infinite;
+}
+
+@media (max-width: 768px) {
+  .mesh-topology-section {
+    padding: 12px 14px;
+  }
+  .topo-svg-canvas {
+    max-height: 220px;
+  }
+  .topo-detail-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 

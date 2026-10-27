@@ -132,7 +132,7 @@ class TestWebSocketSignaling(unittest.TestCase):
     def test_join_full_room_rejected(self) -> None:
         """Verify 3rd participant is rejected when room is full."""
         with self.client.websocket_connect("/ws") as host_ws:
-            host_ws.send_json({"type": "create"})
+            host_ws.send_json({"type": "create", "payload": {"max_participants": 2}})
             created = host_ws.receive_json()
             room_code = created["payload"]["room_code"]
             invitation_token = created["payload"]["invitation_token"]

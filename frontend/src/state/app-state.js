@@ -49,6 +49,7 @@ export function createInitialState() {
     reconnectToken: null, // In-memory only; never persisted in localStorage, cookies, or logs
     peerSessionId: null,
     signalingError: null,
+    participants: [], // Authoritative room participant roster (Phase 2B)
 
     // Real WebRTC state (Phase 4 & 5)
     peerConnectionState: PEER_CONNECTION_STATES.IDLE,
@@ -57,6 +58,7 @@ export function createInitialState() {
     realChatMessages: [], // In-memory only; never persisted to localStorage or database
     realFiles: [],        // In-memory real file transfers
     activeTransfer: null, // Currently streaming file transfer
+    selectedRecipientIds: [], // Selected remote peer session IDs for file transfers (Phase 3)
 
     // Network Resilience & Diagnostics (Phase 6 & 9J)
     isReconnecting: false,
@@ -100,6 +102,7 @@ export function resetSessionState(target = state) {
   target.reconnectToken = null;
   target.peerSessionId = null;
   target.signalingError = null;
+  target.participants = [];
 
   target.peerConnectionState = PEER_CONNECTION_STATES.IDLE;
   target.dataChannelState = DATA_CHANNEL_STATES.IDLE;
@@ -115,8 +118,19 @@ export function resetSessionState(target = state) {
   target.isDiagnosticsOpen = false;
   target.connectionDiagnostics = createDefaultDiagnostics();
 
+  if (Array.isArray(target.realFiles)) {
+    target.realFiles.forEach((f) => {
+      if (f && f.blobUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+        try {
+          URL.revokeObjectURL(f.blobUrl);
+        } catch {}
+      }
+    });
+  }
+
   target.realChatMessages = [];
   target.realFiles = [];
   target.activeTransfer = null;
+  target.selectedRecipientIds = [];
   return target;
 }

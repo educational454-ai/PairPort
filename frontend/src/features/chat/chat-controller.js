@@ -6,6 +6,7 @@
 import { showToast } from '../../components/toast.js';
 import { showConfirmDialog } from '../../components/modal.js';
 import { peerConnectionService } from '../../services/peer-connection.js';
+import { peerRegistry } from '../../services/peer-registry.js';
 import { state } from '../../state/app-state.js';
 import { updateChatUI, renderChatMessages } from './chat-ui.js';
 
@@ -15,13 +16,13 @@ import { updateChatUI, renderChatMessages } from './chat-ui.js';
  *
  * @param {HTMLElement} root - Root application container
  * @param {object} [options]
- * @param {object} [options.peerConnection=peerConnectionService] - WebRTC peer connection service
+ * @param {object} [options.peerConnection=peerRegistry] - WebRTC peer connection or registry service
  * @param {Function} [options.toast=showToast] - Toast notification function
  * @param {Function} [options.confirm=showConfirmDialog] - Confirmation modal function
  * @returns {object} Controller API methods
  */
 export function initChat(root = document, {
-  peerConnection = peerConnectionService,
+  peerConnection = peerRegistry,
   toast = showToast,
   confirm = showConfirmDialog,
 } = {}) {

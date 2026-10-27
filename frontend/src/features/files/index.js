@@ -4,6 +4,7 @@
  */
 
 export {
+  renderRecipientSelector,
   renderActiveTransferPanel,
   renderFilesList,
   renderFileHubColumn,

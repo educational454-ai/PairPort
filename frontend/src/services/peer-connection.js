@@ -158,8 +158,12 @@ export function extractSdpSessionVersion(sdpStr) {
 }
 
 export class PeerConnectionService {
-  constructor(iceServers = APP_CONFIG.iceServers || DEFAULT_ICE_SERVERS) {
+  constructor(iceServers = APP_CONFIG.iceServers || DEFAULT_ICE_SERVERS, options = {}) {
     this.iceServers = iceServers;
+    this.remoteSessionId = options.remoteSessionId || null;
+    this.signaling = options.signaling || signalingClient;
+    this._autoBindSignaling = options.autoBindSignaling !== false;
+    this._signalingUnsubs = [];
     this.pc = null;
 
     // Data channels
@@ -206,7 +210,9 @@ export class PeerConnectionService {
     this._lastIceState = 'idle';
     this._lastGatheringState = 'new';
 
-    this._bindSignalingRelays();
+    if (this._autoBindSignaling) {
+      this._bindSignalingRelays();
+    }
   }
 
   /**
@@ -267,7 +273,17 @@ export class PeerConnectionService {
 
   /** Listen for WebRTC offers, answers, and candidates from the signaling server */
   _bindSignalingRelays() {
-    signalingClient.on('signalOffer', async (payload) => {
+    if (this._signalingUnsubs && this._signalingUnsubs.length > 0) {
+      this._signalingUnsubs.forEach((unsub) => {
+        try { unsub(); } catch {}
+      });
+      this._signalingUnsubs = [];
+    }
+
+    const unsubOffer = this.signaling.on('signalOffer', async (payload) => {
+      if (this.remoteSessionId && payload.sender_session_id && payload.sender_session_id !== this.remoteSessionId) {
+        return;
+      }
       try {
         await this.handleRemoteOffer(payload);
       } catch (err) {
@@ -275,8 +291,12 @@ export class PeerConnectionService {
         this.emit('error', { code: 'OFFER_HANDLING_FAILED', message: 'Failed to process WebRTC offer.' });
       }
     });
+    this._signalingUnsubs.push(unsubOffer);
 
-    signalingClient.on('signalAnswer', async (payload) => {
+    const unsubAnswer = this.signaling.on('signalAnswer', async (payload) => {
+      if (this.remoteSessionId && payload.sender_session_id && payload.sender_session_id !== this.remoteSessionId) {
+        return;
+      }
       try {
         await this.handleRemoteAnswer(payload);
       } catch (err) {
@@ -284,18 +304,27 @@ export class PeerConnectionService {
         this.emit('error', { code: 'ANSWER_HANDLING_FAILED', message: 'Failed to process WebRTC answer.' });
       }
     });
+    this._signalingUnsubs.push(unsubAnswer);
 
-    signalingClient.on('signalCandidate', async (payload) => {
+    const unsubCandidate = this.signaling.on('signalCandidate', async (payload) => {
+      if (this.remoteSessionId && payload.sender_session_id && payload.sender_session_id !== this.remoteSessionId) {
+        return;
+      }
       try {
         await this.handleRemoteCandidate(payload);
       } catch (err) {
         console.warn('Error handling remote ICE candidate:', err);
       }
     });
+    this._signalingUnsubs.push(unsubCandidate);
 
-    signalingClient.on('peerLeft', () => {
+    const unsubLeft = this.signaling.on('peerLeft', (payload) => {
+      if (this.remoteSessionId && payload && payload.peer_session_id && payload.peer_session_id !== this.remoteSessionId) {
+        return;
+      }
       this.close();
     });
+    this._signalingUnsubs.push(unsubLeft);
   }
 
   /** Initiate WebRTC PeerConnection when both peers are present in the signaling room */
@@ -338,10 +367,10 @@ export class PeerConnectionService {
           const candProto = (event.candidate.protocol || 'udp').toLowerCase();
           this.localCandidates.push({ type: candType, protocol: candProto });
           console.log(`[PairPort ICE] Local candidate gathered: type=${candType}, protocol=${candProto}`);
-          signalingClient.sendCandidate(event.candidate.toJSON());
+          this.signaling.sendCandidate(event.candidate.toJSON(), this.remoteSessionId);
         } else {
           console.log('[PairPort ICE] Local candidate gathering complete (end of candidates).');
-          signalingClient.sendCandidate(null);
+          this.signaling.sendCandidate(null, this.remoteSessionId);
         }
       };
 
@@ -431,7 +460,7 @@ export class PeerConnectionService {
         // Host creates and sends offer
         const offer = await this.pc.createOffer();
         await this.pc.setLocalDescription(offer);
-        signalingClient.sendOffer(this.pc.localDescription);
+        this.signaling.sendOffer(this.pc.localDescription, this.remoteSessionId);
       } else {
         // Guest handles incoming data channels
         this.pc.ondatachannel = (event) => {
@@ -599,7 +628,7 @@ export class PeerConnectionService {
         }
         const offer = await this.pc.createOffer({ iceRestart: true });
         await this.pc.setLocalDescription(offer);
-        signalingClient.sendOffer(this.pc.localDescription);
+        this.signaling.sendOffer(this.pc.localDescription, this.remoteSessionId);
         return true;
       } catch (err) {
         console.error('[PairPort] Error generating in-place ICE restart offer:', err);
@@ -674,7 +703,8 @@ export class PeerConnectionService {
       // Generate and send answer
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
-      signalingClient.sendAnswer(this.pc.localDescription);
+      const targetId = payload?.sender_session_id || this.remoteSessionId;
+      this.signaling.sendAnswer(this.pc.localDescription, targetId);
       this.isRestartingIce = false;
     } catch (err) {
       console.error('[PairPort] Failed to apply remote offer or create answer:', err);
@@ -1053,7 +1083,7 @@ export class PeerConnectionService {
    * Initiate sending a file directly to the peer over the WebRTC file channel.
    * Validates size, prepares chunks, applies backpressure, and sends completion message.
    */
-  async sendFile(file) {
+  async sendFile(file, onProgress = null, customTransferId = null) {
     const channel = this.fileChannel || this.chatChannel;
     if (!channel || channel.readyState !== 'open') {
       throw new Error('WebRTC file channel is not open. Direct connection must be established first.');
@@ -1069,7 +1099,9 @@ export class PeerConnectionService {
       throw new Error(`File "${file.name}" (${fileMb} MB) exceeds maximum allowed limit of ${maxMb} MB.`);
     }
 
-    const transferId = `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const transferId = (customTransferId && typeof customTransferId === 'string' && /^[a-zA-Z0-9_-]{1,32}$/.test(customTransferId))
+      ? customTransferId
+      : `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const sanitizedName = sanitizeFilename(file.name);
     const chunkSize = this.chunkSizeBytes;
     const totalChunks = Math.ceil(file.size / chunkSize) || 1;
@@ -1408,6 +1440,13 @@ export class PeerConnectionService {
     this.emit('fileTransferCancelled', { ...transfer, reason });
   }
 
+  /**
+   * Alias for cancelTransfer to maintain consistent naming across registry and connection services.
+   */
+  cancelFileTransfer(transferId, reason = 'Cancelled by user') {
+    return this.cancelTransfer(transferId, reason);
+  }
+
   _failInFlightTransfers(errorMessage) {
     this.activeTransfers.forEach((transfer) => {
       if (transfer.status === TRANSFER_STATES.SENDING || transfer.status === TRANSFER_STATES.RECEIVING || transfer.status === TRANSFER_STATES.WAITING) {
@@ -1495,6 +1534,13 @@ export class PeerConnectionService {
     this.isRestartingIce = false;
     this.isProcessingDescription = false;
 
+    if (this._signalingUnsubs && this.remoteSessionId) {
+      this._signalingUnsubs.forEach((unsub) => {
+        try { unsub(); } catch {}
+      });
+      this._signalingUnsubs = [];
+    }
+
     // Clean up active transfers and revoke all temporary Blob URLs to prevent memory leaks
     if (this.activeTransfers) {
       this.activeTransfers.forEach((transfer) => {
@@ -1511,6 +1557,7 @@ export class PeerConnectionService {
         ) {
           transfer.status = TRANSFER_STATES.FAILED;
           transfer.error = 'Peer connection closed.';
+          this.emit('fileTransferFailed', { ...transfer, error: 'Peer connection closed.' });
         }
       });
       this.activeTransfers.clear();

@@ -285,32 +285,53 @@ export class SignalingClient {
     this.reconnectDeadline = null;
   }
 
-  /** Send WebRTC SDP Offer to peer via signaling server */
-  sendOffer(sdp) {
+  /** Send WebRTC SDP Offer to peer via signaling server, optionally targeted */
+  sendOffer(sdp, targetSessionId = null) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const sdpPayload = {
-        type: sdp.type,
-        sdp: sdp.sdp,
+      const payload = {
+        sdp: {
+          type: sdp.type,
+          sdp: sdp.sdp,
+        },
       };
-      this._send(this.ws, 'signal-offer', { sdp: sdpPayload });
+      if (targetSessionId) {
+        payload.target_session_id = targetSessionId;
+      }
+      this._send(this.ws, 'signal-offer', payload);
     }
   }
 
-  /** Send WebRTC SDP Answer to peer via signaling server */
-  sendAnswer(sdp) {
+  /** Send WebRTC SDP Answer to peer via signaling server, optionally targeted */
+  sendAnswer(sdp, targetSessionId = null) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      const sdpPayload = {
-        type: sdp.type,
-        sdp: sdp.sdp,
+      const payload = {
+        sdp: {
+          type: sdp.type,
+          sdp: sdp.sdp,
+        },
       };
-      this._send(this.ws, 'signal-answer', { sdp: sdpPayload });
+      if (targetSessionId) {
+        payload.target_session_id = targetSessionId;
+      }
+      this._send(this.ws, 'signal-answer', payload);
     }
   }
 
-  /** Send ICE Candidate to peer via signaling server */
-  sendCandidate(candidate) {
+  /** Send ICE Candidate to peer via signaling server, optionally targeted */
+  sendCandidate(candidate, targetSessionId = null) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this._send(this.ws, 'signal-candidate', { candidate });
+      const payload = { candidate };
+      if (targetSessionId) {
+        payload.target_session_id = targetSessionId;
+      }
+      this._send(this.ws, 'signal-candidate', payload);
+    }
+  }
+
+  /** Request current room participant roster from signaling server */
+  requestRoster() {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this._send(this.ws, 'roster');
     }
   }
 
@@ -517,6 +538,11 @@ export class SignalingClient {
           reason: payload.reason || 'Peer left the session.',
         });
         this.emit('peerLeft', payload);
+        break;
+      }
+
+      case 'room-roster': {
+        this.emit('roomRoster', payload);
         break;
       }
 

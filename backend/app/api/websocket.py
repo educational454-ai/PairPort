@@ -20,6 +20,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.config import (
     MAX_MESSAGE_BYTES,
+    MAX_PARTICIPANTS_PER_ROOM,
     RECONNECT_GRACE_PERIOD_SECONDS,
     ROOM_TTL_SECONDS,
     WS_ACTION_LIMIT_ROOM_OPS,
@@ -36,6 +37,7 @@ from app.services.room_manager import (
     DuplicateConnectionError,
     InvalidInvitationError,
     InvalidReconnectCredentialError,
+    InvalidRoomCapacityError,
     InvalidRoomCodeError,
     InvitationAlreadyUsedError,
     InvitationError,
@@ -169,34 +171,100 @@ def validate_candidate(payload: Any) -> tuple[bool, str, Any]:
     return True, "", cleaned_candidate
 
 
+def serialize_participant(p: Participant) -> dict[str, Any]:
+    """Serialize participant state safely without leaking secrets or socket references."""
+    return {
+        "session_id": p.session_id,
+        "role": p.role,
+        "status": p.status,
+    }
+
+
+def get_room_roster(room: Room) -> list[dict[str, Any]]:
+    """Return sanitized participant list for room state broadcast."""
+    return [serialize_participant(p) for p in room.participants.values()]
+
+
+def resolve_signaling_target(
+    room: Room,
+    sender_session_id: str,
+    payload: dict[str, Any],
+) -> tuple[Participant | None, str | None, str | None]:
+    """Resolve and validate the target recipient for WebRTC signaling.
+
+    Returns:
+        (target_participant, error_code, error_message)
+    """
+    target_session_id = payload.get("target_session_id")
+    other_participants = room.get_other_participants(sender_session_id)
+
+    if target_session_id is not None:
+        if not isinstance(target_session_id, str) or not target_session_id.strip():
+            return None, "INVALID_TARGET", "Target session ID must be a non-empty string."
+
+        if target_session_id == sender_session_id:
+            return None, "INVALID_TARGET", "Cannot send signaling message to self."
+
+        target = room.participants.get(target_session_id)
+        if not target:
+            return None, "TARGET_NOT_FOUND", f"Target session '{target_session_id}' not found in room."
+
+        if target.status != "connected" or not target.websocket:
+            return None, "TARGET_NOT_CONNECTED", f"Target session '{target_session_id}' is not currently connected."
+
+        return target, None, None
+
+    # target_session_id omitted:
+    # If exactly 1 other participant exists in the room, preserve 2-person fallback
+    if len(other_participants) == 1:
+        target = other_participants[0]
+        if target.status != "connected" or not target.websocket:
+            return None, "NO_PEER_IN_ROOM", "No connected peer in room to receive signaling."
+        return target, None, None
+
+    if len(other_participants) == 0:
+        return None, "NO_PEER_IN_ROOM", "No peer in room to receive signaling."
+
+    return None, "TARGET_REQUIRED", "In a multi-participant room, 'target_session_id' is required."
+
+
 async def handle_leave(
     room_code: str | None,
     session_id: str | None,
     reason: str = "Peer left the session.",
 ) -> None:
-    """Clean up participant from room on voluntary leave and notify remaining peer."""
+    """Clean up participant from room on voluntary leave and notify remaining peers."""
     if not room_code or not session_id:
         return
 
     room, departed, remaining = await room_manager.leave_room(room_code, session_id)
-    if remaining and remaining.status == "connected" and remaining.websocket:
-        await send_json(
-            remaining.websocket,
-            "peer-left",
-            {
-                "room_code": room_code,
-                "reason": reason,
-            },
-        )
-        # Remaining peer returns to waiting state
-        await send_json(
-            remaining.websocket,
-            "waiting",
-            {
-                "room_code": room_code,
-                "message": "Waiting for a peer to join...",
-            },
-        )
+    if room:
+        roster = get_room_roster(room)
+        for other in room.participants.values():
+            if other.status == "connected" and other.websocket:
+                await send_json(
+                    other.websocket,
+                    "peer-left",
+                    {
+                        "room_code": room_code,
+                        "peer_session_id": session_id,
+                        "reason": reason,
+                        "participants": roster,
+                    },
+                )
+                # If only one participant remains, notify them of waiting state
+                if len(room.participants) == 1:
+                    await send_json(
+                        other.websocket,
+                        "waiting",
+                        {
+                            "room_code": room_code,
+                            "session_id": other.session_id,
+                            "role": other.role,
+                            "participants": roster,
+                            "message": "Waiting for a peer to join...",
+                        },
+                    )
 
 
 async def handle_disconnect(
@@ -211,18 +279,22 @@ async def handle_disconnect(
     room, participant, other = await room_manager.disconnect_participant(
         room_code, session_id, websocket
     )
-    if other and other.status == "connected" and other.websocket:
-        await send_json(
-            other.websocket,
-            "peer-disconnected",
-            {
-                "room_code": room_code,
-                "peer_session_id": session_id,
-                "role": participant.role if participant else "peer",
-                "grace_period": RECONNECT_GRACE_PERIOD_SECONDS,
-                "message": "Peer disconnected unexpectedly. Slot reserved for reconnection.",
-            },
-        )
+    if room:
+        roster = get_room_roster(room)
+        for other_p in room.get_other_participants(session_id):
+            if other_p.status == "connected" and other_p.websocket:
+                await send_json(
+                    other_p.websocket,
+                    "peer-disconnected",
+                    {
+                        "room_code": room_code,
+                        "peer_session_id": session_id,
+                        "role": participant.role if participant else "peer",
+                        "grace_period": RECONNECT_GRACE_PERIOD_SECONDS,
+                        "participants": roster,
+                        "message": "Peer disconnected unexpectedly. Slot reserved for reconnection.",
+                    },
+                )
 
 
 @router.websocket("/ws")
@@ -459,9 +531,35 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
+                requested_max = payload.get("max_participants")
+                max_participants: int | None = None
+                if requested_max is not None:
+                    try:
+                        max_participants = int(requested_max)
+                        if max_participants < 2 or max_participants > MAX_PARTICIPANTS_PER_ROOM:
+                            await send_json(
+                                websocket,
+                                "error",
+                                {
+                                    "code": "INVALID_MAX_PARTICIPANTS",
+                                    "message": f"max_participants must be between 2 and {MAX_PARTICIPANTS_PER_ROOM}.",
+                                },
+                            )
+                            continue
+                    except (ValueError, TypeError):
+                        await send_json(
+                            websocket,
+                            "error",
+                            {
+                                "code": "INVALID_MAX_PARTICIPANTS",
+                                "message": "max_participants must be an integer.",
+                            },
+                        )
+                        continue
+
                 try:
-                    room = await room_manager.create_room()
-                except ServerCapacityError as cap_err:
+                    room = await room_manager.create_room(max_participants=max_participants)
+                except (ServerCapacityError, InvalidRoomCapacityError) as cap_err:
                     await send_json(
                         websocket,
                         "error",
@@ -475,6 +573,7 @@ async def websocket_signaling_endpoint(
                 room, participant, reconnect_token = await room_manager.join_room(room.code, websocket, role="host")
                 current_room_code = room.code
                 current_session_id = participant.session_id
+                roster = get_room_roster(room)
 
                 await send_json(
                     websocket,
@@ -485,6 +584,8 @@ async def websocket_signaling_endpoint(
                         "session_id": current_session_id,
                         "role": participant.role,
                         "reconnect_token": reconnect_token,
+                        "max_participants": room.max_participants,
+                        "participants": roster,
                         "expires_in": ROOM_TTL_SECONDS,
                     },
                 )
@@ -497,6 +598,8 @@ async def websocket_signaling_endpoint(
                         "session_id": current_session_id,
                         "role": participant.role,
                         "reconnect_token": reconnect_token,
+                        "max_participants": room.max_participants,
+                        "participants": roster,
                         "message": "Waiting for peer to join with this room code.",
                     },
                 )
@@ -553,45 +656,42 @@ async def websocket_signaling_endpoint(
                     current_room_code = room.code
                     current_session_id = participant.session_id
 
-                    other = room.get_other_participant(current_session_id)
-                    if other and other.status == "connected" and other.websocket:
-                        # Both participants now present
-                        await send_json(
-                            websocket,
-                            "peer-joined",
-                            {
-                                "room_code": room.code,
-                                "session_id": current_session_id,
-                                "role": participant.role,
-                                "peer_session_id": other.session_id,
-                                "reconnect_token": reconnect_token,
-                                "message": "Connected to room peer.",
-                            },
-                        )
-                        # Notify other participant (NEVER leak joining participant's reconnect_token!)
-                        await send_json(
-                            other.websocket,
-                            "peer-joined",
-                            {
-                                "room_code": room.code,
-                                "session_id": other.session_id,
-                                "role": other.role,
-                                "peer_session_id": current_session_id,
-                                "message": "Peer joined the room.",
-                            },
-                        )
-                    else:
-                        await send_json(
-                            websocket,
-                            "waiting",
-                            {
-                                "room_code": room.code,
-                                "session_id": current_session_id,
-                                "role": participant.role,
-                                "reconnect_token": reconnect_token,
-                                "message": "Waiting for peer to join with this room code.",
-                            },
-                        )
+                    roster = get_room_roster(room)
+                    other_participants = room.get_other_participants(current_session_id)
+                    legacy_peer_id = other_participants[0].session_id if len(other_participants) == 1 else None
+
+                    # Joining guest receives peer-joined with their own credentials and full roster
+                    await send_json(
+                        websocket,
+                        "peer-joined",
+                        {
+                            "room_code": room.code,
+                            "session_id": current_session_id,
+                            "role": participant.role,
+                            "peer_session_id": legacy_peer_id,
+                            "reconnect_token": reconnect_token,
+                            "max_participants": room.max_participants,
+                            "participants": roster,
+                            "message": "Connected to room peer.",
+                        },
+                    )
+
+                    # Notify each other connected participant (NEVER leak joining participant's reconnect_token!)
+                    for other in other_participants:
+                        if other.status == "connected" and other.websocket:
+                            await send_json(
+                                other.websocket,
+                                "peer-joined",
+                                {
+                                    "room_code": room.code,
+                                    "session_id": other.session_id,
+                                    "role": other.role,
+                                    "peer_session_id": current_session_id,
+                                    "peer_role": participant.role,
+                                    "participants": roster,
+                                    "message": "Peer joined the room.",
+                                },
+                            )
                 except RoomError as err:
                     await send_json(
                         websocket,
@@ -680,6 +780,10 @@ async def websocket_signaling_endpoint(
                     current_room_code = room.code
                     current_session_id = participant.session_id
 
+                    roster = get_room_roster(room)
+                    other_participants = room.get_other_participants(current_session_id)
+                    legacy_peer_id = other.session_id if (len(other_participants) == 1 and other and other.status == "connected") else None
+
                     # Send reconnected event with newly rotated reconnect token to reconnected client
                     await send_json(
                         websocket,
@@ -689,23 +793,26 @@ async def websocket_signaling_endpoint(
                             "session_id": participant.session_id,
                             "role": participant.role,
                             "reconnect_token": new_token,
-                            "peer_session_id": other.session_id if (other and other.status == "connected") else None,
+                            "peer_session_id": legacy_peer_id,
+                            "participants": roster,
                             "message": "Successfully reconnected to room.",
                         },
                     )
 
-                    # Notify other participant if actively connected
-                    if other and other.status == "connected" and other.websocket:
-                        await send_json(
-                            other.websocket,
-                            "peer-reconnected",
-                            {
-                                "room_code": room.code,
-                                "peer_session_id": participant.session_id,
-                                "role": participant.role,
-                                "message": "Peer has reconnected.",
-                            },
-                        )
+                    # Notify all other connected peers
+                    for other_p in other_participants:
+                        if other_p.status == "connected" and other_p.websocket:
+                            await send_json(
+                                other_p.websocket,
+                                "peer-reconnected",
+                                {
+                                    "room_code": room.code,
+                                    "peer_session_id": participant.session_id,
+                                    "role": participant.role,
+                                    "participants": roster,
+                                    "message": "Peer has reconnected.",
+                                },
+                            )
                 except RoomError as err:
                     await send_json(
                         websocket,
@@ -731,12 +838,12 @@ async def websocket_signaling_endpoint(
                     await send_json(websocket, "error", {"code": err.code, "message": str(err)})
                     continue
 
-                other = room.get_other_participant(current_session_id)
-                if not other or not other.websocket:
+                target, err_code, err_msg = resolve_signaling_target(room, current_session_id, payload)
+                if not target or not target.websocket:
                     await send_json(
                         websocket,
                         "error",
-                        {"code": "NO_PEER_IN_ROOM", "message": "Cannot send offer: no peer in room to receive it."},
+                        {"code": err_code or "NO_PEER_IN_ROOM", "message": err_msg or "Cannot send offer: no peer to receive it."},
                     )
                     continue
 
@@ -749,13 +856,14 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
-                # Relay offer strictly to the verified other participant
+                # Relay offer strictly to the verified target participant
                 await send_json(
-                    other.websocket,
+                    target.websocket,
                     "signal-offer",
                     {
                         "room_code": current_room_code,
                         "sender_session_id": current_session_id,
+                        "target_session_id": target.session_id,
                         "sdp": clean_sdp,
                     },
                 )
@@ -778,12 +886,12 @@ async def websocket_signaling_endpoint(
                     await send_json(websocket, "error", {"code": err.code, "message": str(err)})
                     continue
 
-                other = room.get_other_participant(current_session_id)
-                if not other or not other.websocket:
+                target, err_code, err_msg = resolve_signaling_target(room, current_session_id, payload)
+                if not target or not target.websocket:
                     await send_json(
                         websocket,
                         "error",
-                        {"code": "NO_PEER_IN_ROOM", "message": "Cannot send answer: no peer in room to receive it."},
+                        {"code": err_code or "NO_PEER_IN_ROOM", "message": err_msg or "Cannot send answer: no peer to receive it."},
                     )
                     continue
 
@@ -796,13 +904,14 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
-                # Relay answer strictly to the verified other participant
+                # Relay answer strictly to the verified target participant
                 await send_json(
-                    other.websocket,
+                    target.websocket,
                     "signal-answer",
                     {
                         "room_code": current_room_code,
                         "sender_session_id": current_session_id,
+                        "target_session_id": target.session_id,
                         "sdp": clean_sdp,
                     },
                 )
@@ -825,9 +934,13 @@ async def websocket_signaling_endpoint(
                     await send_json(websocket, "error", {"code": err.code, "message": str(err)})
                     continue
 
-                other = room.get_other_participant(current_session_id)
-                if not other or not other.websocket:
-                    # Ignore or notify if peer is not present
+                target, err_code, err_msg = resolve_signaling_target(room, current_session_id, payload)
+                if not target or not target.websocket:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": err_code or "NO_PEER_IN_ROOM", "message": err_msg or "Cannot send candidate: no peer to receive it."},
+                    )
                     continue
 
                 is_valid, err_msg, clean_cand = validate_candidate(payload)
@@ -839,13 +952,14 @@ async def websocket_signaling_endpoint(
                     )
                     continue
 
-                # Relay candidate strictly to the verified other participant
+                # Relay candidate strictly to the verified target participant
                 await send_json(
-                    other.websocket,
+                    target.websocket,
                     "signal-candidate",
                     {
                         "room_code": current_room_code,
                         "sender_session_id": current_session_id,
+                        "target_session_id": target.session_id,
                         "candidate": clean_cand,
                     },
                 )
@@ -859,6 +973,82 @@ async def websocket_signaling_endpoint(
                     current_room_code = None
                     current_session_id = None
                 await send_json(websocket, "left", {"message": "Successfully left the room."})
+
+            # ----------------------------------------------------
+            # 6b. Action: ROSTER
+            # ----------------------------------------------------
+            elif msg_type in ("roster", "get-roster", "participant-roster"):
+                if not current_room_code or not current_session_id:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": "NOT_IN_ROOM", "message": "Cannot request roster: not joined to any room."},
+                    )
+                    continue
+
+                try:
+                    room = await room_manager.get_room(current_room_code)
+                    await send_json(
+                        websocket,
+                        "room-roster",
+                        {
+                            "room_code": room.code,
+                            "participants": get_room_roster(room),
+                        },
+                    )
+                except RoomError as err:
+                    await send_json(websocket, "error", {"code": err.code, "message": str(err)})
+                    continue
+
+            # ----------------------------------------------------
+            # 6c. Action: REVOKE-INVITATION
+            # ----------------------------------------------------
+            elif msg_type == "revoke-invitation":
+                if not rate_limiter.allow_room_action():
+                    await send_json(
+                        websocket,
+                        "error",
+                        {
+                            "code": "RATE_LIMITED",
+                            "message": "Too many room actions. Please slow down.",
+                        },
+                    )
+                    continue
+
+                if not current_room_code or not current_session_id:
+                    await send_json(
+                        websocket,
+                        "error",
+                        {"code": "NOT_IN_ROOM", "message": "Cannot revoke invitation: not joined to any room."},
+                    )
+                    continue
+
+                try:
+                    room = await room_manager.get_room(current_room_code)
+                    sender = room.participants.get(current_session_id)
+                    if not sender or sender.role != "host":
+                        await send_json(
+                            websocket,
+                            "error",
+                            {
+                                "code": "UNAUTHORIZED_ROLE",
+                                "message": "Only the room host can revoke invitations.",
+                            },
+                        )
+                        continue
+
+                    room.revoke_invitation()
+                    await send_json(
+                        websocket,
+                        "invitation-revoked",
+                        {
+                            "room_code": room.code,
+                            "message": "Room invitation token has been revoked.",
+                        },
+                    )
+                except RoomError as err:
+                    await send_json(websocket, "error", {"code": err.code, "message": str(err)})
+                    continue
 
             # ----------------------------------------------------
             # 7. Action: PING

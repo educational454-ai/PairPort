@@ -44,6 +44,10 @@ import {
   updateFilesUI,
   initFiles,
 } from './features/files/index.js';
+import {
+  renderTopologySection,
+  initTopologyPanel,
+} from './features/topology/index.js';
 
 /** Render the complete PairPort UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -127,6 +131,9 @@ export function startApp(root = document.querySelector('#app')) {
   // Track session pairing state for smooth workspace transition
   let wasPaired = false;
 
+  // Initialize Live Mesh Network Topology Panel (Phase 2B)
+  const topologyController = initTopologyPanel(root);
+
   // Initialize connection controller (signaling & WebRTC connection lifecycle)
   initConnectionController(root, {
     onSessionUIUpdate: () => {
@@ -148,6 +155,15 @@ export function startApp(root = document.querySelector('#app')) {
       // If user is on workspace and session is lost/left, guard routes back to pairing
       if (current === 'workspace' && !hasSession) {
         router.navigate('pairing');
+      }
+
+      // Update topology panel with latest state and diagnostics (isolated error containment)
+      if (topologyController && typeof topologyController.update === 'function') {
+        try {
+          topologyController.update();
+        } catch (err) {
+          console.warn('[PairPort] Topology panel update error:', err);
+        }
       }
     },
     onChatUIUpdate: () => updateChatUI(root),
@@ -258,6 +274,9 @@ function renderWorkspaceSection() {
               </button>
             </div>
           </div>
+
+          <!-- Live Mesh Network Topology & Telemetry Panel (Phase 2B) -->
+          ${renderTopologySection(state)}
 
           <!-- Workspace Split Grid -->
           <div class="workspace-grid">

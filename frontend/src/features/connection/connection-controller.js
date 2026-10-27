@@ -11,6 +11,7 @@ import {
   PEER_CONNECTION_STATES,
   DATA_CHANNEL_STATES,
 } from '../../services/peer-connection.js';
+import { peerRegistry } from '../../services/peer-registry.js';
 import { state, resetSessionState } from '../../state/app-state.js';
 import { formatTime } from '../../utils/ui-helpers.js';
 import { copyInvitationToClipboard } from '../../utils/invitation.js';
@@ -116,7 +117,7 @@ export function initConnectionController(root = document, {
   onChatUIUpdate,
   onFilesUIUpdate,
   signaling = signalingClient,
-  peerConnection = peerConnectionService,
+  peerConnection = peerRegistry,
   toast = showToast,
 } = {}) {
   // Prevent duplicate registration on same root
@@ -269,6 +270,10 @@ export function initConnectionController(root = document, {
     state.realRole = detail.role || state.realRole;
     state.peerSessionId = detail.peerSessionId;
 
+    if (typeof peerConnection.setMySessionId === 'function' && detail.sessionId) {
+      peerConnection.setMySessionId(detail.sessionId, detail.role || state.realRole);
+    }
+
     if (newState === SIGNALING_STATES.ERROR) {
       state.signalingError = detail.message || 'Signaling error occurred.';
     } else {
@@ -285,6 +290,9 @@ export function initConnectionController(root = document, {
     state.reconnectToken = payload.reconnect_token || null;
     state.invitationToken = payload.invitation_token || null;
     state.invitationRoomCode = payload.room_code || null;
+    if (typeof peerConnection.setMySessionId === 'function') {
+      peerConnection.setMySessionId(payload.session_id, payload.role);
+    }
     toast(`Real room "${payload.room_code}" created on server!`, 'success');
   });
 
@@ -293,18 +301,40 @@ export function initConnectionController(root = document, {
     toast(`Waiting for peer to join room ${state.realRoomCode || ''}`, 'info', 3000);
   });
 
+  signaling.on('roomRoster', async (payload) => {
+    if (Array.isArray(payload?.participants)) {
+      state.participants = payload.participants;
+    }
+    if (typeof peerConnection.handleRoster === 'function') {
+      try {
+        await peerConnection.handleRoster(payload?.participants);
+      } catch (err) {
+        console.error('Roster sync error:', err);
+      }
+    }
+    refreshSessionUI();
+  });
+
   signaling.on('peerJoined', async (payload) => {
     signaling._pendingJoin = null;
     state.realRoomCode = payload.room_code;
     state.peerSessionId = payload.peer_session_id;
+    if (Array.isArray(payload?.participants)) {
+      state.participants = payload.participants;
+    }
     if (payload.reconnect_token) {
       state.reconnectToken = payload.reconnect_token;
     }
-    toast(`Peer connected to signaling room ${payload.room_code}. Initializing WebRTC...`, 'info', 3000);
+    const peerLabel = payload.peer_session_id ? `Peer ${payload.peer_session_id.slice(0, 8)}` : 'Peer';
+    toast(`${peerLabel} connected to room ${payload.room_code}. Initializing WebRTC...`, 'info', 3000);
 
-    // Both peers present: initiate WebRTC peer connection
+    // Initiate WebRTC peer connection
     try {
-      await peerConnection.startPeerConnection(state.realRole);
+      if (typeof peerConnection.handlePeerJoined === 'function') {
+        await peerConnection.handlePeerJoined(payload);
+      } else {
+        await peerConnection.startPeerConnection(state.realRole);
+      }
     } catch (err) {
       console.error('WebRTC start error:', err);
       toast('Failed to start WebRTC peer connection.', 'warning');
@@ -329,6 +359,14 @@ export function initConnectionController(root = document, {
     state.reconnectToken = payload.reconnect_token;
     state.peerSessionId = payload.peer_session_id || null;
 
+    if (typeof peerConnection.setMySessionId === 'function') {
+      peerConnection.setMySessionId(state.realSessionId, state.realRole);
+    }
+
+    if (typeof signaling.requestRoster === 'function') {
+      signaling.requestRoster();
+    }
+
     // Attempt WebRTC recovery if peer is present and data channels are not open
     if (payload.peer_session_id && (!peerConnection.isChatReady() || !peerConnection.isFileChannelReady())) {
       await recoverWebRTCTransport('Signaling reconnected');
@@ -341,8 +379,12 @@ export function initConnectionController(root = document, {
   });
 
   signaling.on('peerDisconnected', (payload) => {
+    if (typeof peerConnection.handlePeerDisconnected === 'function') {
+      peerConnection.handlePeerDisconnected(payload);
+    }
+
     state.isPeerDisconnected = true;
-    const grace = Number(payload.grace_period) || 30.0;
+    const grace = Number(payload?.grace_period) || 30.0;
     state.peerDisconnectGracePeriod = grace;
     state.peerDisconnectDeadline = Date.now() + (grace * 1000);
 
@@ -359,10 +401,11 @@ export function initConnectionController(root = document, {
       refreshSessionUI();
     }, 1000);
 
+    const peerInfo = payload?.peer_session_id ? `Peer ${payload.peer_session_id.slice(0, 8)}` : 'Peer';
     state.realChatMessages.push({
       id: `sys-peer-dc-${Date.now()}`,
       sender: 'system',
-      text: `Peer disconnected unexpectedly. Slot reserved for ${Math.round(grace)}s reconnect grace period...`,
+      text: `${peerInfo} disconnected unexpectedly. Slot reserved for ${Math.round(grace)}s reconnect grace period...`,
       timestamp: formatTime(new Date()),
       isReal: true,
     });
@@ -370,10 +413,14 @@ export function initConnectionController(root = document, {
     refreshSessionUI();
     if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
     if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
-    toast(`Peer disconnected temporarily. Waiting up to ${Math.round(grace)}s for reconnect...`, 'warning', 4000);
+    toast(`${peerInfo} disconnected temporarily. Waiting up to ${Math.round(grace)}s for reconnect...`, 'warning', 4000);
   });
 
   signaling.on('peerReconnected', async (payload) => {
+    if (typeof peerConnection.handlePeerReconnected === 'function') {
+      await peerConnection.handlePeerReconnected(payload);
+    }
+
     if (peerDisconnectTimer) {
       clearInterval(peerDisconnectTimer);
       peerDisconnectTimer = null;
@@ -381,12 +428,13 @@ export function initConnectionController(root = document, {
     state.isPeerDisconnected = false;
     state.peerDisconnectGracePeriod = null;
     state.peerDisconnectDeadline = null;
-    state.peerSessionId = payload.peer_session_id || state.peerSessionId;
+    state.peerSessionId = payload?.peer_session_id || state.peerSessionId;
 
+    const peerInfo = payload?.peer_session_id ? `Peer ${payload.peer_session_id.slice(0, 8)}` : 'Peer';
     state.realChatMessages.push({
       id: `sys-peer-rc-${Date.now()}`,
       sender: 'system',
-      text: 'Peer reconnected to room! Restoring WebRTC connection...',
+      text: `${peerInfo} reconnected to room! Restoring WebRTC connection...`,
       timestamp: formatTime(new Date()),
       isReal: true,
     });
@@ -398,39 +446,65 @@ export function initConnectionController(root = document, {
     refreshSessionUI();
     if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
     if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
-    toast('Peer reconnected to signaling room!', 'info', 3000);
+    toast(`${peerInfo} reconnected to signaling room!`, 'info', 3000);
   });
 
   signaling.on('reconnectFailed', (payload) => {
     handleRecoveryFailure(payload?.message || 'Signaling reconnection attempts exhausted.');
   });
 
-  signaling.on('peerLeft', () => {
-    if (peerDisconnectTimer) {
-      clearInterval(peerDisconnectTimer);
-      peerDisconnectTimer = null;
-    }
-    state.isPeerDisconnected = false;
-    state.peerDisconnectGracePeriod = null;
-    state.peerDisconnectDeadline = null;
-    state.peerSessionId = null;
-    peerConnection.close();
+  signaling.on('peerLeft', (payload) => {
+    if (typeof peerConnection.handlePeerLeft === 'function') {
+      peerConnection.handlePeerLeft(payload);
+      const remaining = typeof peerConnection.getPeerCount === 'function' ? peerConnection.getPeerCount() : 0;
+      if (remaining === 0) {
+        if (peerDisconnectTimer) {
+          clearInterval(peerDisconnectTimer);
+          peerDisconnectTimer = null;
+        }
+        state.isPeerDisconnected = false;
+        state.peerDisconnectGracePeriod = null;
+        state.peerDisconnectDeadline = null;
+        state.peerSessionId = null;
 
-    state.realFiles.forEach((f) => {
-      if (f.blobUrl) {
-        try { URL.revokeObjectURL(f.blobUrl); } catch {}
-        f.blobUrl = null;
+        state.realFiles.forEach((f) => {
+          if (f.blobUrl) {
+            try { URL.revokeObjectURL(f.blobUrl); } catch {}
+            f.blobUrl = null;
+          }
+        });
+        state.realFiles = [];
+        state.activeTransfer = null;
+        state.fileChannelState = DATA_CHANNEL_STATES.IDLE;
       }
-    });
+    } else {
+      if (peerDisconnectTimer) {
+        clearInterval(peerDisconnectTimer);
+        peerDisconnectTimer = null;
+      }
+      state.isPeerDisconnected = false;
+      state.peerDisconnectGracePeriod = null;
+      state.peerDisconnectDeadline = null;
+      state.peerSessionId = null;
+      peerConnection.close();
 
-    state.realFiles = [];
-    state.activeTransfer = null;
-    state.fileChannelState = DATA_CHANNEL_STATES.IDLE;
+      state.realFiles.forEach((f) => {
+        if (f.blobUrl) {
+          try { URL.revokeObjectURL(f.blobUrl); } catch {}
+          f.blobUrl = null;
+        }
+      });
 
+      state.realFiles = [];
+      state.activeTransfer = null;
+      state.fileChannelState = DATA_CHANNEL_STATES.IDLE;
+    }
+
+    const peerInfo = payload?.peer_session_id ? `Peer ${payload.peer_session_id.slice(0, 8)}` : 'Peer';
     state.realChatMessages.push({
       id: `sys-${Date.now()}`,
       sender: 'system',
-      text: 'Peer left the session. WebRTC DataChannels closed. Waiting for a new peer...',
+      text: `${peerInfo} left the session.`,
       timestamp: formatTime(new Date()),
       isReal: true,
     });
@@ -438,7 +512,7 @@ export function initConnectionController(root = document, {
     refreshSessionUI();
     if (typeof onChatUIUpdate === 'function') onChatUIUpdate();
     if (typeof onFilesUIUpdate === 'function') onFilesUIUpdate();
-    toast('Peer left the room.', 'warning', 4000);
+    toast(`${peerInfo} left the room.`, 'warning', 4000);
   });
 
   signaling.on('error', (payload) => {

@@ -103,11 +103,34 @@ def is_origin_allowed(raw_origin: str | None) -> tuple[bool, str]:
     return False, "Origin not allowed"
 
 
+def parse_max_participants(raw_val: str | None = None) -> int:
+    """Parse and validate PAIRPORT_MAX_PARTICIPANTS environment configuration.
+
+    Must be an integer >= 2. Defaults to 4 if unset or empty.
+    Raises ValueError with a clear explanation if malformed or < 2.
+    """
+    if raw_val is None:
+        raw_val = os.getenv("PAIRPORT_MAX_PARTICIPANTS")
+    if raw_val is None or not str(raw_val).strip():
+        return 4
+    try:
+        val = int(str(raw_val).strip())
+    except (ValueError, TypeError) as exc:
+        raise ValueError(
+            f"Invalid PAIRPORT_MAX_PARTICIPANTS '{raw_val}': must be an integer >= 2."
+        ) from exc
+    if val < 2:
+        raise ValueError(
+            f"Invalid PAIRPORT_MAX_PARTICIPANTS '{raw_val}': room capacity must be at least 2 participants."
+        )
+    return val
+
+
 # Room lifecycle and limits
 ROOM_TTL_SECONDS = int(os.getenv("PAIRPORT_ROOM_TTL_SECONDS", "1800"))  # 30 minutes
 ROOM_CLEANUP_INTERVAL_SECONDS = int(os.getenv("PAIRPORT_ROOM_CLEANUP_INTERVAL_SECONDS", "300"))  # 5 minutes
 MAX_MESSAGE_BYTES = int(os.getenv("PAIRPORT_MAX_MESSAGE_BYTES", "65536"))  # 64 KB
-MAX_PARTICIPANTS_PER_ROOM = 2
+MAX_PARTICIPANTS_PER_ROOM = parse_max_participants()
 ROOM_CODE_PREFIX = "PORT-"
 ROOM_CODE_LENGTH = int(os.getenv("PAIRPORT_ROOM_CODE_LENGTH", "6"))  # e.g. PORT-7K2M9X (31^6 = 887,503,681 combinations)
 

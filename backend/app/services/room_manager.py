@@ -57,6 +57,11 @@ class InvalidRoomCodeError(RoomError):
     code = "INVALID_ROOM_CODE"
 
 
+class InvalidRoomCapacityError(RoomError, ValueError):
+    """Raised when an explicit room capacity is outside allowed bounds (2 to max_participants_per_room)."""
+    code = "INVALID_ROOM_CAPACITY"
+
+
 class DuplicateConnectionError(RoomError):
     code = "DUPLICATE_CONNECTION"
 
@@ -186,14 +191,17 @@ class Room:
     host_session_id: str | None = None
     invitation_token: str | None = None
     invitation_consumed: bool = False
+    invitation_claims_count: int = 0
+    invitation_revoked: bool = False
     invitation_created_at: float = field(default_factory=time.time)
     invitation_ttl: float = INVITATION_TTL_SECONDS
+    max_participants: int = MAX_PARTICIPANTS_PER_ROOM
     created_at: float = field(default_factory=time.time)
     last_activity_at: float = field(default_factory=time.time)
     participants: dict[str, Participant] = field(default_factory=dict)
 
     def is_full(self) -> bool:
-        return len(self.participants) >= MAX_PARTICIPANTS_PER_ROOM
+        return len(self.participants) >= self.max_participants
 
     def is_empty(self) -> bool:
         return len(self.participants) == 0
@@ -201,6 +209,11 @@ class Room:
     def is_expired(self, now: float | None = None, ttl: float = ROOM_TTL_SECONDS) -> bool:
         current = now if now is not None else time.time()
         return (current - self.created_at) > ttl
+
+    def revoke_invitation(self) -> None:
+        """Revoke active invitation token, disallowing any further guest joins."""
+        self.invitation_revoked = True
+        self.invitation_consumed = True
 
     def is_invitation_valid(self, token: str | None, now: float | None = None) -> tuple[bool, str]:
         """Validate an invitation token against this room.
@@ -210,7 +223,7 @@ class Room:
         if not token or not isinstance(token, str) or not token.strip():
             return False, "INVITATION_REQUIRED"
 
-        if self.invitation_consumed:
+        if self.invitation_revoked or self.invitation_consumed:
             return False, "INVITATION_ALREADY_USED"
 
         current_time = now if now is not None else time.time()
@@ -227,6 +240,10 @@ class Room:
             if sid != session_id:
                 return p
         return None
+
+    def get_other_participants(self, session_id: str) -> list[Participant]:
+        """Return list of all participants in the room other than session_id."""
+        return [p for sid, p in self.participants.items() if sid != session_id]
 
     def get_host(self) -> Participant | None:
         for p in self.participants.values():
@@ -255,15 +272,34 @@ class RoomManager:
         default_ttl: float = ROOM_TTL_SECONDS,
         grace_period: float = RECONNECT_GRACE_PERIOD_SECONDS,
         require_invitation_token: bool = REQUIRE_INVITATION_TOKEN,
+        max_participants_per_room: int = MAX_PARTICIPANTS_PER_ROOM,
     ) -> None:
         self.rooms: dict[str, Room] = {}
         self.default_ttl = default_ttl
         self.grace_period = grace_period
         self.require_invitation_token = require_invitation_token
+        self.max_participants_per_room = max_participants_per_room
         self._lock = asyncio.Lock()
 
-    async def create_room(self, ttl: float | None = None, now: float | None = None) -> Room:
+    async def create_room(
+        self,
+        ttl: float | None = None,
+        max_participants: int | None = None,
+        now: float | None = None,
+    ) -> Room:
         """Create a new room with a unique random code and guest invitation token."""
+        # Enforce capacity constraints before acquiring lock or modifying state
+        if max_participants is not None:
+            if not isinstance(max_participants, int) or isinstance(max_participants, bool):
+                raise InvalidRoomCapacityError("max_participants must be an integer.")
+            if max_participants < 2 or max_participants > self.max_participants_per_room:
+                raise InvalidRoomCapacityError(
+                    f"max_participants must be between 2 and {self.max_participants_per_room} (got {max_participants})."
+                )
+            effective_max = max_participants
+        else:
+            effective_max = self.max_participants_per_room
+
         current_time = now if now is not None else time.time()
         async with self._lock:
             if len(self.rooms) >= MAX_ACTIVE_ROOMS:
@@ -290,8 +326,11 @@ class RoomManager:
                 host_session_id=None,
                 invitation_token=invitation_token,
                 invitation_consumed=False,
+                invitation_claims_count=0,
+                invitation_revoked=False,
                 invitation_created_at=current_time,
                 invitation_ttl=effective_invitation_ttl,
+                max_participants=effective_max,
                 created_at=current_time,
                 last_activity_at=current_time,
             )
@@ -349,7 +388,7 @@ class RoomManager:
             room.prune_expired_participants(now=current_time, grace_period=self.grace_period)
 
             if room.is_full():
-                raise RoomFullError(f"Room '{code}' already has the maximum of {MAX_PARTICIPANTS_PER_ROOM} participants.")
+                raise RoomFullError(f"Room '{code}' already has the maximum of {room.max_participants} participants.")
 
             # Host-role authorization enforcement:
             # Only the initial participant in an unseated room can seat as host.
@@ -365,15 +404,17 @@ class RoomManager:
                 if invitation_token and str(invitation_token).strip():
                     is_valid, reason = room.is_invitation_valid(invitation_token, now=current_time)
                     if not is_valid:
-                        if reason == "INVITATION_ALREADY_USED":
+                        if reason in ("INVITATION_ALREADY_USED", "INVITATION_REVOKED"):
                             raise InvitationAlreadyUsedError("Invitation token has already been consumed.")
                         elif reason == "INVITATION_EXPIRED":
                             raise InvitationExpiredError("Invitation token has expired.")
                         else:
                             raise InvalidInvitationError("Invalid invitation token.")
 
-                    # Consume token atomically with slot assignment
-                    room.invitation_consumed = True
+                    # Consume token atomically with slot assignment when guest quota is reached
+                    room.invitation_claims_count += 1
+                    if room.invitation_claims_count >= (room.max_participants - 1):
+                        room.invitation_consumed = True
                 elif self.require_invitation_token:
                     raise InvitationRequiredError("Invitation token is required to join as guest.")
 
@@ -558,23 +599,24 @@ class RoomManager:
                 pruned = room.prune_expired_participants(now=current_time, grace_period=self.grace_period)
                 if pruned:
                     for p in pruned:
-                        other = room.get_other_participant(p.session_id)
-                        if other and other.status == "connected" and other.websocket:
-                            try:
-                                import json
-                                asyncio.create_task(
-                                    other.websocket.send_text(
-                                        json.dumps({
-                                            "type": "peer-left",
-                                            "payload": {
-                                                "room_code": code,
-                                                "reason": "Peer disconnected and reconnect window expired.",
-                                            },
-                                        })
+                        for other in room.get_other_participants(p.session_id):
+                            if other and other.status == "connected" and other.websocket:
+                                try:
+                                    import json
+                                    asyncio.create_task(
+                                        other.websocket.send_text(
+                                            json.dumps({
+                                                "type": "peer-left",
+                                                "payload": {
+                                                    "room_code": code,
+                                                    "peer_session_id": p.session_id,
+                                                    "reason": "Peer disconnected and reconnect window expired.",
+                                                },
+                                            })
+                                        )
                                     )
-                                )
-                            except Exception:
-                                pass
+                                except Exception:
+                                    pass
 
                 # 2. Check if room is empty or TTL expired
                 if room.is_empty() or room.is_expired(now=current_time, ttl=effective_ttl):

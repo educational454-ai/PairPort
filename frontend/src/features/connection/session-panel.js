@@ -12,6 +12,7 @@ import {
   PEER_CONNECTION_STATES,
   DATA_CHANNEL_STATES,
 } from '../../services/peer-connection.js';
+import { peerRegistry } from '../../services/peer-registry.js';
 import { escapeHtml } from '../../utils/ui-helpers.js';
 
 /**
@@ -22,7 +23,10 @@ import { escapeHtml } from '../../utils/ui-helpers.js';
  */
 export function computeSessionStatusInfo(currentState = state) {
   const isDataChannelOpen = currentState.dataChannelState === DATA_CHANNEL_STATES.OPEN;
-  const isFileChannelOpen = currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
+  const isFileChannelOpen =
+    currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN ||
+    peerRegistry.isFileChannelReady() ||
+    peerConnectionService.isFileChannelReady();
   const isSessionActive = currentState.signalingState !== SIGNALING_STATES.IDLE;
   const isReconnecting = currentState.isReconnecting;
   const isSignalingReconnecting = currentState.isSignalingReconnecting;
@@ -118,7 +122,10 @@ export function renderLiveSessionPanel(currentState = state) {
   const isSignalingReconnecting = currentState.isSignalingReconnecting;
   const isPeerDisconnected = currentState.isPeerDisconnected;
   const isDataChannelOpen = currentState.dataChannelState === DATA_CHANNEL_STATES.OPEN;
-  const isFileChannelOpen = currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN || peerConnectionService.isFileChannelReady();
+  const isFileChannelOpen =
+    currentState.fileChannelState === DATA_CHANNEL_STATES.OPEN ||
+    peerRegistry.isFileChannelReady() ||
+    peerConnectionService.isFileChannelReady();
   const isRelayActive = currentState.connectionDiagnostics?.isRelay;
 
   let remainingPeerSec = 0;
