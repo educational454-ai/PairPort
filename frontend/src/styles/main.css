@@ -3849,6 +3849,826 @@ input:disabled,
 }
 
 /* --------------------------------------------------------------------------
+   13C. Network Lab — Diagnostic Console & Hex Inspector (Phase 2)
+   -------------------------------------------------------------------------- */
+.network-lab-section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: all var(--transition-normal);
+}
+
+.network-lab-section.is-collapsed {
+  border-color: var(--border-subtle);
+}
+
+.netlab-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.netlab-title-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.netlab-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.8);
+  display: inline-block;
+}
+
+.netlab-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.netlab-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.netlab-counter-pill {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.netlab-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.netlab-distinction-banner {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid #60a5fa;
+  border-bottom: 1px solid rgba(59, 130, 246, 0.15);
+  padding: 12px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.netlab-distinction-banner .banner-icon {
+  color: #60a5fa;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.netlab-toolbar {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.toolbar-filter-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.netlab-filter-btn {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.netlab-filter-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.netlab-filter-btn.active {
+  background: rgba(99, 102, 241, 0.25);
+  color: #e0e7ff;
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.toolbar-hint .privacy-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #94a3b8;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.netlab-workspace-grid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  height: 520px;
+  min-height: 0;
+  max-height: 520px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow: hidden;
+  position: relative;
+}
+
+.netlab-timeline-col {
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.netlab-inspector-col {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.netlab-inspector-host {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.col-header {
+  padding: 8px 14px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.netlab-timeline-host {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.netlab-event-item {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.netlab-event-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.09);
+}
+
+.netlab-event-item.selected {
+  background: rgba(99, 102, 241, 0.16);
+  border-color: rgba(99, 102, 241, 0.45);
+}
+
+.event-item-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.72rem;
+  margin-bottom: 4px;
+}
+
+.event-item-bottom {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.event-item-dir.dir-out {
+  color: #60a5fa;
+}
+
+.event-item-dir.dir-in {
+  color: #34d399;
+}
+
+.event-item-dir.dir-local {
+  color: #94a3b8;
+}
+
+.event-item-time {
+  color: var(--text-muted);
+}
+
+.event-item-cat {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.event-item-cat.cat-chat, .netlab-badge.cat-chat {
+  background: rgba(16, 185, 129, 0.18);
+  color: #34d399;
+}
+
+.event-item-cat.cat-file, .netlab-badge.cat-file {
+  background: rgba(59, 130, 246, 0.18);
+  color: #60a5fa;
+}
+
+.event-item-cat.cat-webrtc, .netlab-badge.cat-webrtc {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.event-item-cat.cat-stats, .netlab-badge.cat-stats {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.event-item-peer {
+  font-size: 0.68rem;
+  color: #a5b4fc;
+  margin-left: auto;
+}
+
+.netlab-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.netlab-badge.dir-out {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.netlab-badge.dir-in {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.netlab-badge.dir-local {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+}
+
+.netlab-inspector-content {
+  padding: 16px 20px;
+}
+
+.netlab-insp-header {
+  margin-bottom: 14px;
+}
+
+.netlab-insp-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.netlab-insp-time {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin-left: auto;
+}
+
+.netlab-insp-id {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.netlab-insp-id code {
+  color: #93c5fd;
+}
+
+.netlab-insp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.insp-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.insp-k {
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.insp-v {
+  font-size: 0.82rem;
+  color: var(--text-primary);
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.insp-v.status-ok, .insp-v.status-accepted, .insp-v.status-complete {
+  color: #34d399;
+}
+
+.insp-v.status-streaming {
+  color: #60a5fa;
+}
+
+.insp-v.status-failed, .insp-v.status-error {
+  color: #f87171;
+}
+
+.netlab-layer-matrix {
+  margin: 16px 0;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+}
+
+.matrix-title {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.matrix-table {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.matrix-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  padding: 5px 8px;
+  border-radius: 4px;
+  align-items: center;
+}
+
+.matrix-row.header {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.matrix-row.highlight {
+  background: rgba(99, 102, 241, 0.12);
+  color: #e0e7ff;
+}
+
+.matrix-row.wire-packet-row {
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 2px solid #f87171;
+}
+
+.m-col.layer {
+  font-weight: 700;
+  width: 140px;
+}
+
+.m-col.spec {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.m-col.val {
+  font-weight: 600;
+  text-align: right;
+}
+
+.wire-note {
+  color: #fca5a5;
+  font-style: italic;
+  font-size: 0.75rem;
+}
+
+.matrix-footnote {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 8px;
+  margin-bottom: 0;
+  line-height: 1.4;
+}
+
+.netlab-payload-section {
+  margin-top: 16px;
+}
+
+.payload-header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.payload-section-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 0;
+  font-weight: 700;
+}
+
+.netlab-hex-container {
+  background: #090d16;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.netlab-hex-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.74rem;
+  color: var(--text-secondary);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.netlab-hex-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.netlab-trunc-badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: #f59e0b;
+}
+
+.netlab-trunc-badge.complete {
+  color: #34d399;
+}
+
+.netlab-hex-pre {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 10px 14px;
+  margin: 0;
+  overflow-x: auto;
+  line-height: 1.6;
+  color: #e2e8f0;
+}
+
+.hex-offset {
+  color: #64748b;
+  font-weight: 600;
+}
+
+.hex-bytes {
+  color: #93c5fd;
+}
+
+.hex-ascii {
+  color: #cbd5e1;
+}
+
+.netlab-privacy-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.netlab-revealed-container {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: rgba(16, 185, 129, 0.06);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-md);
+}
+
+.revealed-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  margin-bottom: 6px;
+  color: #34d399;
+  font-weight: 600;
+}
+
+.revealed-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.revealed-type {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: #a7f3d0;
+}
+
+.revealed-text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #f1f5f9;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.revealed-binary-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78rem;
+  color: #fbbf24;
+  line-height: 1.4;
+}
+
+.netlab-stats-section {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: #090e1a;
+  position: relative;
+  z-index: 2;
+  clear: both;
+}
+
+.stats-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.stats-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.stats-icon {
+  color: #a78bfa;
+}
+
+.stats-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.stats-freshness {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+}
+
+.netlab-stats-table-wrapper {
+  overflow-x: auto;
+}
+
+.netlab-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.netlab-stats-table th {
+  text-align: left;
+  padding: 6px 10px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.netlab-stats-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.stats-state-pill {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.stats-state-pill.connected {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.stats-state-pill.connecting {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+}
+
+.stats-state-pill.disconnected, .stats-state-pill.failed {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.stats-cand-pill {
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.stats-cand-pill.direct {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.stats-cand-pill.relay {
+  background: rgba(168, 85, 247, 0.18);
+  color: #c084fc;
+}
+
+.stats-cipher-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #94a3b8;
+  font-size: 0.72rem;
+}
+
+.stats-rate-cell {
+  display: flex;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+
+.rate-out {
+  color: #60a5fa;
+}
+
+.rate-in {
+  color: #34d399;
+}
+
+.netlab-stats-footer {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.netlab-wireshark-callout {
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(147, 51, 234, 0.07);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.callout-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  color: #c084fc;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.callout-text {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.4;
+}
+
+.netlab-inspector-empty, .netlab-timeline-empty, .netlab-stats-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.netlab-empty-icon {
+  margin-bottom: 10px;
+  opacity: 0.4;
+}
+
+.netlab-empty-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 6px 0;
+}
+
+.netlab-empty-desc, .netlab-empty-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 320px;
+  margin: 0;
+  line-height: 1.4;
+}
+
+@media (max-width: 768px) {
+  .netlab-workspace-grid {
+    grid-template-columns: 1fr;
+    height: auto;
+    max-height: none;
+  }
+  .netlab-timeline-col {
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    height: 260px;
+    max-height: 260px;
+  }
+  .netlab-inspector-col {
+    height: 380px;
+    max-height: 380px;
+  }
+  .netlab-stats-table {
+    font-size: 0.72rem;
+  }
+  .stats-cipher-cell {
+    max-width: 100px;
+  }
+}
+
+/* --------------------------------------------------------------------------
    14. Reduced Motion (Accessibility)
    -------------------------------------------------------------------------- */
 @media (prefers-reduced-motion: reduce) {

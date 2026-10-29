@@ -48,6 +48,10 @@ import {
   renderTopologySection,
   initTopologyPanel,
 } from './features/topology/index.js';
+import {
+  renderNetworkLabSection,
+  initNetworkLabPanel,
+} from './features/network-lab/index.js';
 
 /** Render the complete PairPort UI and wire up interactions */
 export function startApp(root = document.querySelector('#app')) {
@@ -134,6 +138,9 @@ export function startApp(root = document.querySelector('#app')) {
   // Initialize Live Mesh Network Topology Panel (Phase 2B)
   const topologyController = initTopologyPanel(root);
 
+  // Initialize Network Lab Inspection Console (Phase 2)
+  const netLabController = initNetworkLabPanel(root);
+
   // Initialize connection controller (signaling & WebRTC connection lifecycle)
   initConnectionController(root, {
     onSessionUIUpdate: () => {
@@ -165,6 +172,15 @@ export function startApp(root = document.querySelector('#app')) {
           console.warn('[PairPort] Topology panel update error:', err);
         }
       }
+
+      // Update Network Lab with latest state
+      if (netLabController && typeof netLabController.update === 'function') {
+        try {
+          netLabController.update();
+        } catch (err) {
+          console.warn('[PairPort] Network Lab update error:', err);
+        }
+      }
     },
     onChatUIUpdate: () => updateChatUI(root),
     onFilesUIUpdate: () => updateFilesUI(root),
@@ -186,6 +202,20 @@ export function startApp(root = document.querySelector('#app')) {
       const leaveBtn = root.querySelector('#leave-room-btn');
       if (leaveBtn) {
         leaveBtn.click();
+      }
+    });
+  }
+
+  // Wire up Network Lab shortcut button in workspace topbar
+  const workspaceNetLabBtn = root.querySelector('#workspace-netlab-btn');
+  if (workspaceNetLabBtn) {
+    workspaceNetLabBtn.addEventListener('click', () => {
+      if (netLabController && typeof netLabController.setOpen === 'function') {
+        netLabController.setOpen(true);
+      }
+      const netLabPanel = root.querySelector('#network-lab-panel');
+      if (netLabPanel) {
+        netLabPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
     });
   }
@@ -264,6 +294,10 @@ function renderWorkspaceSection() {
                 ${icons.wifi(14)}
                 <span>${metaBadgeText}</span>
               </span>
+              <button type="button" id="workspace-netlab-btn" class="btn btn-ghost btn-xs" title="Open Network Lab inspection console">
+                ${icons.activity(14)}
+                <span>Network Lab</span>
+              </button>
               <button type="button" id="clear-chat-btn" class="btn btn-ghost btn-xs" title="Clear chat messages">
                 ${icons.refresh(14)}
                 <span>Clear Chat</span>
@@ -277,6 +311,9 @@ function renderWorkspaceSection() {
 
           <!-- Live Mesh Network Topology & Telemetry Panel (Phase 2B) -->
           ${renderTopologySection(state)}
+
+          <!-- Network Lab — Protocol & Traffic Inspector (Phase 2) -->
+          ${renderNetworkLabSection(state)}
 
           <!-- Workspace Split Grid -->
           <div class="workspace-grid">

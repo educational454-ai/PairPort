@@ -18,6 +18,7 @@ import {
   DEFAULT_ICE_SERVERS,
 } from './peer-connection.js';
 import { APP_CONFIG } from '../config/app-config.js';
+import { networkLabService } from './network-lab.js';
 
 export const MAX_MESH_REMOTE_PEERS = 3; // 4 devices total (1 local + up to 3 remote)
 
@@ -28,6 +29,9 @@ export class PeerRegistry {
     this.maxRemotePeers = options.maxRemotePeers || MAX_MESH_REMOTE_PEERS;
 
     this.peers = new Map(); // remoteSessionId -> PeerConnectionService
+    try {
+      networkLabService.bindRegistry(this);
+    } catch {}
     this.mySessionId = null;
     this.myRole = null;
     this.roomCode = null;
@@ -349,6 +353,9 @@ export class PeerRegistry {
     this.roomCode = null;
     this.latestRoster = [];
     this._updateAggregatedStates();
+    try {
+      networkLabService.stopStatsPolling();
+    } catch {}
   }
 
   /** Alias for closeAll() to match PeerConnectionService interface */

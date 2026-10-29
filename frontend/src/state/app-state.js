@@ -12,6 +12,7 @@ import {
   PEER_CONNECTION_STATES,
   DATA_CHANNEL_STATES,
 } from '../services/peer-connection.js';
+import { networkLabService } from '../services/network-lab.js';
 
 /**
  * Create a fresh default diagnostics object.
@@ -70,6 +71,7 @@ export function createInitialState() {
     peerDisconnectDeadline: null,
     isDiagnosticsOpen: false,
     connectionDiagnostics: createDefaultDiagnostics(),
+    isNetworkLabOpen: false,
 
     // UI state
     isMobileMenuOpen: false,
@@ -117,6 +119,12 @@ export function resetSessionState(target = state) {
   target.peerDisconnectDeadline = null;
   target.isDiagnosticsOpen = false;
   target.connectionDiagnostics = createDefaultDiagnostics();
+  target.isNetworkLabOpen = false;
+
+  try {
+    networkLabService.clearHistory();
+    networkLabService.stopStatsPolling();
+  } catch {}
 
   if (Array.isArray(target.realFiles)) {
     target.realFiles.forEach((f) => {

@@ -12,6 +12,7 @@
 
 import { signalingClient } from './signaling.js';
 import { APP_CONFIG } from '../config/app-config.js';
+import { networkLabService, EVENT_CATEGORIES, EVENT_SOURCES } from './network-lab.js';
 
 export const PEER_CONNECTION_STATES = Object.freeze({
   IDLE: 'idle',
@@ -981,7 +982,22 @@ export class PeerConnectionService {
       timestamp: timeStr,
     };
 
-    channel.send(JSON.stringify(messagePayload));
+    const payloadStr = JSON.stringify(messagePayload);
+    channel.send(payloadStr);
+
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.CHAT,
+        type: 'chat:outgoing',
+        direction: 'out',
+        peerSessionId: this.remoteSessionId,
+        messageId: messagePayload.id,
+        payloadSize: typeof payloadStr === 'string' ? new TextEncoder().encode(payloadStr).byteLength : 0,
+        rawPayload: payloadStr,
+        observationPoint: 'accepted-by-channel',
+        details: { textLength: trimmedText.length },
+      });
+    } catch {}
 
     return {
       id: messagePayload.id,
@@ -1001,6 +1017,20 @@ export class PeerConnectionService {
         const timestamp = String(data.timestamp || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })).slice(0, 30);
         const senderName = String(data.senderName || 'Peer').slice(0, 50);
         const id = String(data.id || `msg-${Date.now()}`).slice(0, 64);
+
+        try {
+          networkLabService.recordEvent({
+            category: EVENT_CATEGORIES.CHAT,
+            type: 'chat:incoming',
+            direction: 'in',
+            peerSessionId: this.remoteSessionId,
+            messageId: id,
+            payloadSize: typeof rawData === 'string' ? new TextEncoder().encode(rawData).byteLength : (rawData?.byteLength || 0),
+            rawPayload: rawData,
+            observationPoint: 'received-from-channel',
+            details: { textLength: text.length, senderName },
+          });
+        } catch {}
 
         this.emit('chatMessage', {
           id,
@@ -1152,7 +1182,22 @@ export class PeerConnectionService {
     };
 
     try {
-      channel.send(JSON.stringify(metaMessage));
+      const metaStr = JSON.stringify(metaMessage);
+      channel.send(metaStr);
+      try {
+        networkLabService.recordEvent({
+          category: EVENT_CATEGORIES.FILES,
+          type: 'file:start_outgoing',
+          direction: 'out',
+          peerSessionId: this.remoteSessionId,
+          transferId: transfer.id,
+          name: transfer.name,
+          payloadSize: new TextEncoder().encode(metaStr).byteLength,
+          rawPayload: metaStr,
+          observationPoint: 'accepted-by-channel',
+          details: { size: transfer.size, totalChunks: transfer.totalChunks, chunkSize: transfer.chunkSize },
+        });
+      } catch {}
     } catch (err) {
       transfer.status = TRANSFER_STATES.FAILED;
       transfer.error = `Failed to send metadata: ${err.message}`;
@@ -1206,6 +1251,25 @@ export class PeerConnectionService {
 
       try {
         channel.send(packet);
+        try {
+          networkLabService.recordEvent({
+            category: EVENT_CATEGORIES.FILES,
+            type: 'file:chunk_outgoing',
+            direction: 'out',
+            peerSessionId: this.remoteSessionId,
+            transferId: transfer.id,
+            name: transfer.name,
+            chunkIndex,
+            totalChunks: transfer.totalChunks,
+            headerSize: CHUNK_HEADER_SIZE,
+            payloadSize: chunkBuffer.byteLength,
+            frameSize: packet.byteLength,
+            originalFileSize: transfer.size,
+            progress: transfer.progress,
+            rawPayload: packet,
+            observationPoint: 'accepted-by-channel',
+          });
+        } catch {}
       } catch (sendErr) {
         transfer.status = TRANSFER_STATES.FAILED;
         transfer.error = `Send failed: ${sendErr.message}`;
@@ -1232,10 +1296,25 @@ export class PeerConnectionService {
     };
 
     try {
-      channel.send(JSON.stringify(completeMessage));
+      const completeStr = JSON.stringify(completeMessage);
+      channel.send(completeStr);
       transfer.status = TRANSFER_STATES.COMPLETED;
       transfer.progress = 100;
       this.emit('fileTransferComplete', { ...transfer });
+      try {
+        networkLabService.recordEvent({
+          category: EVENT_CATEGORIES.FILES,
+          type: 'file:complete_outgoing',
+          direction: 'out',
+          peerSessionId: this.remoteSessionId,
+          transferId: transfer.id,
+          name: transfer.name,
+          payloadSize: new TextEncoder().encode(completeStr).byteLength,
+          rawPayload: completeStr,
+          observationPoint: 'accepted-by-channel',
+          details: { totalBytes: transfer.transferredBytes, totalChunks: chunkIndex },
+        });
+      } catch {}
     } catch (err) {
       transfer.status = TRANSFER_STATES.FAILED;
       transfer.error = err.message;
@@ -1310,6 +1389,18 @@ export class PeerConnectionService {
 
     this.activeTransfers.set(transferId, transfer);
     this.emit('fileTransferStart', { ...transfer });
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.FILES,
+        type: 'file:start_incoming',
+        direction: 'in',
+        peerSessionId: this.remoteSessionId,
+        transferId: transfer.id,
+        name: transfer.name,
+        details: { size: transfer.size, totalChunks: transfer.totalChunks, chunkSize: transfer.chunkSize },
+        observationPoint: 'received-from-channel',
+      });
+    } catch {}
   }
 
   _handleFileChunk(buffer) {
@@ -1363,6 +1454,25 @@ export class PeerConnectionService {
     transfer.progress = transfer.size === 0 ? 100 : Math.min(99, Math.round((transfer.transferredBytes / transfer.size) * 100));
 
     this.emit('fileTransferProgress', { ...transfer });
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.FILES,
+        type: 'file:chunk_incoming',
+        direction: 'in',
+        peerSessionId: this.remoteSessionId,
+        transferId: unpacked.transferId,
+        name: transfer.name,
+        chunkIndex: unpacked.chunkIndex,
+        totalChunks: transfer.totalChunks,
+        headerSize: CHUNK_HEADER_SIZE,
+        payloadSize: unpacked.payload.byteLength,
+        frameSize: buffer.byteLength,
+        originalFileSize: transfer.size,
+        progress: transfer.progress,
+        rawPayload: buffer,
+        observationPoint: 'received-from-channel',
+      });
+    } catch {}
   }
 
   _handleFileComplete(msg) {
@@ -1389,6 +1499,18 @@ export class PeerConnectionService {
       // Free individual chunk byte arrays from memory
       transfer.receivedChunks = null;
       this.emit('fileTransferComplete', { ...transfer });
+      try {
+        networkLabService.recordEvent({
+          category: EVENT_CATEGORIES.FILES,
+          type: 'file:complete_incoming',
+          direction: 'in',
+          peerSessionId: this.remoteSessionId,
+          transferId: transfer.id,
+          name: transfer.name,
+          details: { totalBytes: transfer.transferredBytes, totalChunks: transfer.totalChunks },
+          observationPoint: 'received-from-channel',
+        });
+      } catch {}
     } catch (err) {
       transfer.status = TRANSFER_STATES.FAILED;
       transfer.error = `Failed to create Blob: ${err.message}`;
@@ -1482,16 +1604,46 @@ export class PeerConnectionService {
   _setConnectionState(newState) {
     this.connectionState = newState;
     this.emit('connectionStateChange', newState);
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.WEBRTC,
+        type: 'webrtc:connection_state',
+        direction: 'internal',
+        peerSessionId: this.remoteSessionId,
+        status: newState,
+        observationPoint: 'webrtc-state-change',
+      });
+    } catch {}
   }
 
   _setDataChannelState(newState) {
     this.dataChannelState = newState;
     this.emit('dataChannelStateChange', newState);
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.WEBRTC,
+        type: 'webrtc:chat_channel_state',
+        direction: 'internal',
+        peerSessionId: this.remoteSessionId,
+        status: newState,
+        observationPoint: 'webrtc-state-change',
+      });
+    } catch {}
   }
 
   _setFileChannelState(newState) {
     this.fileChannelState = newState;
     this.emit('fileChannelStateChange', newState);
+    try {
+      networkLabService.recordEvent({
+        category: EVENT_CATEGORIES.WEBRTC,
+        type: 'webrtc:file_channel_state',
+        direction: 'internal',
+        peerSessionId: this.remoteSessionId,
+        status: newState,
+        observationPoint: 'webrtc-state-change',
+      });
+    } catch {}
   }
 
   isChatReady() {
